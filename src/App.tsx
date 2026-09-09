@@ -168,6 +168,35 @@ export default function App() {
     setIsDirty(true);
   }, [historyIndex]);
 
+  // Synchronous references for reliable external MIDI real-time processing
+  const latestScoreRef = useRef(score);
+  const latestSelectionRef = useRef(selection);
+  const latestViewModeRef = useRef(viewMode);
+  const latestMidiModeRef = useRef(midiMode);
+
+  useEffect(() => {
+    latestScoreRef.current = score;
+    latestSelectionRef.current = selection;
+    latestViewModeRef.current = viewMode;
+    latestMidiModeRef.current = midiMode;
+  });
+
+  // Keep accidental preference and key signature in sync with MIDI service
+  useEffect(() => {
+    midiService.setAccidentalPreference(selectedAccidental);
+  }, [selectedAccidental]);
+
+  useEffect(() => {
+    midiService.setKeySignature(score.metadata.initialKeySignature);
+  }, [score.metadata.initialKeySignature]);
+
+  // Auto-initialize Web MIDI on mount
+  useEffect(() => {
+    midiService.initialize().catch((err) => {
+      console.warn('MIDI initialization note:', err);
+    });
+  }, []);
+
   // Undo / Redo
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
@@ -739,7 +768,12 @@ export default function App() {
         m.measureNumber = i + 1;
       });
 
-      const updated: Score = { ...prev, measures: newMeasures };
+      const updatedAnnotations = (prev.textAnnotations || []).map((t) => {
+        const mIdx = newMeasures.findIndex((m) => m.id === t.measureId);
+        return mIdx >= 0 ? { ...t, measureNumber: mIdx + 1 } : t;
+      });
+
+      const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
       setSelection({ measureId: newMeasure.id, staff: 'RH', eventId: null });
       return updated;
@@ -767,7 +801,12 @@ export default function App() {
         m.measureNumber = i + 1;
       });
 
-      const updated: Score = { ...prev, measures: newMeasures };
+      const updatedAnnotations = (prev.textAnnotations || []).map((t) => {
+        const mIdx = newMeasures.findIndex((m) => m.id === t.measureId);
+        return mIdx >= 0 ? { ...t, measureNumber: mIdx + 1 } : t;
+      });
+
+      const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
       setSelection({ measureId: newMeasure.id, staff: 'RH', eventId: null });
       return updated;
@@ -792,7 +831,12 @@ export default function App() {
         m.measureNumber = i + 1;
       });
 
-      const updated: Score = { ...prev, measures: newMeasures };
+      const updatedAnnotations = (prev.textAnnotations || []).map((t) => {
+        const mIdx = newMeasures.findIndex((m) => m.id === t.measureId);
+        return mIdx >= 0 ? { ...t, measureNumber: mIdx + 1 } : t;
+      });
+
+      const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
       setSelection({ measureId: cloned.id, staff: 'RH', eventId: null });
       return updated;
@@ -806,7 +850,15 @@ export default function App() {
       newMeasures.forEach((m, i) => {
         m.measureNumber = i + 1;
       });
-      const updated: Score = { ...prev, measures: newMeasures };
+
+      const updatedAnnotations = (prev.textAnnotations || [])
+        .filter((t) => t.measureId !== targetMeasureId)
+        .map((t) => {
+          const mIdx = newMeasures.findIndex((m) => m.id === t.measureId);
+          return mIdx >= 0 ? { ...t, measureNumber: mIdx + 1 } : t;
+        });
+
+      const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
       setSelection({ measureId: newMeasures[0].id, staff: 'RH', eventId: null });
       return updated;
@@ -986,15 +1038,17 @@ export default function App() {
   // Insert Note in Pianotastic Custom Notation Format
   const handlePianotasticNoteInput = useCallback((pitch: Pitch) => {
     try {
-      const currentMeasureId = selection.measureId || score.measures[0]?.id;
-      const measureIdx = Math.max(0, score.measures.findIndex((m) => m.id === currentMeasureId));
-      const currentMeasure = score.measures[measureIdx] || score.measures[0];
+      const curScore = latestScoreRef.current;
+      const curSel = latestSelectionRef.current;
+      const currentMeasureId = curSel.measureId || curScore.measures[0]?.id;
+      const measureIdx = Math.max(0, curScore.measures.findIndex((m) => m.id === currentMeasureId));
+      const currentMeasure = curScore.measures[measureIdx] || curScore.measures[0];
       if (!currentMeasure) return;
 
-      const pickup = score.metadata.pickupBeat || 1;
+      const pickup = curScore.metadata.pickupBeat || 1;
       let curBeat =
-        selection.beatIndex !== undefined
-          ? selection.beatIndex
+        curSel.beatIndex !== undefined
+          ? curSel.beatIndex
           : currentMeasure.measureNumber === 1
           ? pickup - 1
           : 0;
@@ -1003,9 +1057,9 @@ export default function App() {
       if (isBeatLockedByPickup(currentMeasure.measureNumber, curBeat, pickup)) {
         curBeat = pickup - 1;
       }
-      let curSubBeat = selection.subBeatIndex || 0;
+      let curSubBeat = curSel.subBeatIndex || 0;
 
-      const effectiveVal = getEffectiveBeatValue(score, measureIdx, curBeat);
+      const effectiveVal = getEffectiveBeatValue(curScore, measureIdx, curBeat);
       if (curSubBeat >= effectiveVal) {
         curSubBeat = 0;
       }
@@ -1030,20 +1084,20 @@ export default function App() {
 
       const syncedMeasure = syncMeasureEventsFromBeatData(
         updatedMeasure,
-        score.metadata.initialTimeSignature,
-        score.metadata.handTemplate || 'Both'
+        curScore.metadata.initialTimeSignature,
+        curScore.metadata.handTemplate || 'Both'
       );
 
       // Calculate automatic cursor advancement
       const nextPos = calculateNextCursorPosition(
-        score,
+        curScore,
         currentMeasureId,
         curBeat,
         curSubBeat,
         effectiveVal
       );
 
-      let newMeasures = score.measures.map((m) => (m.id === currentMeasureId ? syncedMeasure : m));
+      let newMeasures = curScore.measures.map((m) => (m.id === currentMeasureId ? syncedMeasure : m));
       let nextMeasureId = nextPos.nextMeasureId;
       let nextBeatIdx = nextPos.nextBeatIndex;
       let nextSubBeatIdx = nextPos.nextSubBeatIndex;
@@ -1062,8 +1116,8 @@ export default function App() {
         };
         const syncedNewM = syncMeasureEventsFromBeatData(
           newM,
-          score.metadata.initialTimeSignature,
-          score.metadata.handTemplate || 'Both'
+          curScore.metadata.initialTimeSignature,
+          curScore.metadata.handTemplate || 'Both'
         );
         newMeasures.push(syncedNewM);
         nextMeasureId = newM.id;
@@ -1072,29 +1126,40 @@ export default function App() {
       }
 
       const updatedScore: Score = {
-        ...score,
+        ...curScore,
         measures: newMeasures,
       };
 
-      pushScoreState(updatedScore);
-      setSelection({
+      const newSel = {
         measureId: nextMeasureId,
-        staff: activeHand === 'LH' ? 'LH' : 'RH',
+        staff: (activeHand === 'LH' ? 'LH' : 'RH') as 'LH' | 'RH',
         eventId: null,
         beatIndex: nextBeatIdx,
         subBeatIndex: nextSubBeatIdx,
-      });
+      };
+
+      // Keep refs fresh immediately so fast sequential MIDI notes don't collide
+      latestScoreRef.current = updatedScore;
+      latestSelectionRef.current = newSel;
+
+      pushScoreState(updatedScore);
+      setSelection(newSel);
 
       // Sound feedback with audio safety guard
       try {
-        audioEngine.playPitch(pitch, score.metadata.initialKeySignature, 0.65);
+        audioEngine.playPitch(pitch, curScore.metadata.initialKeySignature, 0.65);
       } catch (audioErr) {
         console.warn('Audio playback error:', audioErr);
       }
     } catch (err) {
       console.error('Note input error:', err);
     }
-  }, [selection, score, activeHand, pushScoreState]);
+  }, [activeHand, pushScoreState]);
+
+  const handlePianotasticNoteInputRef = useRef(handlePianotasticNoteInput);
+  useEffect(() => {
+    handlePianotasticNoteInputRef.current = handlePianotasticNoteInput;
+  });
 
   // Advance subdivision without entering a note (creates intentional empty slot '.')
   const handleAdvanceSubdivisionWithoutNote = useCallback(() => {
@@ -1465,18 +1530,53 @@ export default function App() {
         targetId = targetId || `text_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const isEditing = existing.some((t) => t.id === targetId);
 
+        // Resolve exact target measure
+        let targetMeasureId = annotationData.measureId;
+        if (!targetMeasureId && isEditing) {
+          targetMeasureId = existing.find((t) => t.id === targetId)?.measureId;
+        }
+        if (!targetMeasureId && selection.measureId && prev.measures.some((m) => m.id === selection.measureId)) {
+          targetMeasureId = selection.measureId;
+        }
+        if (!targetMeasureId) {
+          targetMeasureId = prev.measures[0]?.id || 'm1';
+        }
+
+        const measIndex = prev.measures.findIndex((m) => m.id === targetMeasureId);
+        const targetMeasure = measIndex >= 0 ? prev.measures[measIndex] : prev.measures[0];
+        const canonicalMeasureId = targetMeasure ? targetMeasure.id : targetMeasureId;
+        const canonicalMeasureNumber = measIndex >= 0 ? measIndex + 1 : (targetMeasure?.measureNumber || 1);
+
+        const targetBeatIndex = annotationData.beatIndex !== undefined
+          ? annotationData.beatIndex
+          : (selection.beatIndex !== undefined ? selection.beatIndex : 0);
+
         let updated: ScoreTextAnnotation[];
         if (isEditing) {
-          updated = existing.map((t) =>
-            t.id === targetId ? ({ ...t, ...annotationData } as ScoreTextAnnotation) : t
-          );
+          updated = existing.map((t) => {
+            if (t.id !== targetId) return t;
+            return {
+              ...t,
+              ...annotationData,
+              id: targetId,
+              type: 'text',
+              text: annotationData.text !== undefined ? annotationData.text : t.text,
+              content: annotationData.text !== undefined ? annotationData.text : (annotationData.content || t.text),
+              measureId: canonicalMeasureId,
+              measureNumber: canonicalMeasureNumber,
+              beatIndex: targetBeatIndex,
+            } as ScoreTextAnnotation;
+          });
         } else {
           const newAnnotation: ScoreTextAnnotation = {
             id: targetId,
-            text: annotationData.text || '',
-            measureId: annotationData.measureId || selection.measureId || prev.measures[0]?.id || 'm1',
-            measureNumber: annotationData.measureNumber || 1,
-            beatIndex: annotationData.beatIndex ?? (selection.beatIndex !== undefined ? selection.beatIndex : 0),
+            type: 'text',
+            text: annotationData.text || annotationData.content || '',
+            content: annotationData.text || annotationData.content || '',
+            measureId: canonicalMeasureId,
+            measureNumber: canonicalMeasureNumber,
+            beatIndex: targetBeatIndex,
+            subBeatIndex: annotationData.subBeatIndex,
             placement: annotationData.placement || 'above',
             offsetX: annotationData.offsetX ?? 0,
             offsetY: annotationData.offsetY ?? 0,
@@ -1538,6 +1638,22 @@ export default function App() {
     }));
   }, []);
 
+  const handleCommitMoveTextAnnotation = useCallback(
+    (textId: string, offsetX: number, offsetY: number) => {
+      setScore((prev) => {
+        const updatedScore: Score = {
+          ...prev,
+          textAnnotations: (prev.textAnnotations || []).map((t) =>
+            t.id === textId ? { ...t, offsetX, offsetY } : t
+          ),
+        };
+        pushScoreState(updatedScore);
+        return updatedScore;
+      });
+    },
+    [pushScoreState]
+  );
+
   const handleSelectTextAnnotation = useCallback(
     (textId: string) => {
       const textObj = (score.textAnnotations || []).find((t) => t.id === textId);
@@ -1553,27 +1669,52 @@ export default function App() {
     [score.textAnnotations]
   );
 
-  const handleEditTextAnnotation = useCallback((textAnnotation: ScoreTextAnnotation) => {
-    setTextModalConfig({
-      isOpen: true,
-      initialData: textAnnotation,
-      measureId: textAnnotation.measureId,
-      measureNumber: textAnnotation.measureNumber,
-      beatIndex: textAnnotation.beatIndex !== undefined ? textAnnotation.beatIndex : 0,
-      placement: textAnnotation.placement || 'above',
-    });
-  }, []);
+  const handleEditTextAnnotation = useCallback(
+    (textAnnotation: ScoreTextAnnotation) => {
+      const measIndex = score.measures.findIndex((m) => m.id === textAnnotation.measureId);
+      const meas = measIndex >= 0 ? score.measures[measIndex] : score.measures[0];
+      const validMeasureNumber = measIndex >= 0 ? measIndex + 1 : (meas?.measureNumber || textAnnotation.measureNumber || 1);
+
+      setTextModalConfig({
+        isOpen: true,
+        initialData: {
+          ...textAnnotation,
+          measureNumber: validMeasureNumber,
+        },
+        measureId: textAnnotation.measureId,
+        measureNumber: validMeasureNumber,
+        beatIndex: textAnnotation.beatIndex !== undefined ? textAnnotation.beatIndex : 0,
+        placement: textAnnotation.placement || 'above',
+      });
+    },
+    [score.measures]
+  );
 
   const handleOpenAddTextModal = useCallback(
     (measureId: string, beatIndex: number, placement?: 'above' | 'below') => {
-      const meas = score.measures.find((m) => m.id === measureId);
+      const measIndex = score.measures.findIndex((m) => m.id === measureId);
+      const meas = measIndex >= 0 ? score.measures[measIndex] : score.measures[0];
+      const validMeasureId = meas ? meas.id : measureId;
+      const validMeasureNumber = measIndex >= 0 ? measIndex + 1 : (meas?.measureNumber || 1);
+
       setTextModalConfig({
         isOpen: true,
-        measureId,
-        measureNumber: meas?.measureNumber || 1,
+        initialData: {
+          measureId: validMeasureId,
+          measureNumber: validMeasureNumber,
+          beatIndex,
+          placement: placement || 'above',
+        },
+        measureId: validMeasureId,
+        measureNumber: validMeasureNumber,
         beatIndex,
         placement: placement || 'above',
       });
+      setSelection((sel) => ({
+        ...sel,
+        measureId: validMeasureId,
+        beatIndex,
+      }));
     },
     [score.measures]
   );
@@ -2022,13 +2163,25 @@ export default function App() {
   // Web MIDI note input listener
   useEffect(() => {
     const unsubscribe = midiService.onNote((pitch) => {
-      if (viewMode !== 'editor') return;
-      handlePianotasticNoteInput(pitch);
+      if (latestViewModeRef.current !== 'editor') return;
+      if (latestMidiModeRef.current === 'playback') {
+        try {
+          audioEngine.playPitch(
+            pitch,
+            latestScoreRef.current.metadata.initialKeySignature,
+            0.65
+          );
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      handlePianotasticNoteInputRef.current(pitch);
     });
     return () => {
       unsubscribe();
     };
-  }, [handlePianotasticNoteInput, viewMode]);
+  }, []);
 
   // Audio Engine position callback
   useEffect(() => {
@@ -2084,8 +2237,26 @@ export default function App() {
         onUpdateMetadata={handleUpdateMetadata}
         onUpdateLayout={handleUpdateLayout}
         onLoadScore={(newScore) => {
-          setScore(newScore);
-          pushScoreState(newScore);
+          const normalizedScore: Score = {
+            ...newScore,
+            textAnnotations: (newScore.textAnnotations || []).map((t, i) => {
+              const mIdx = newScore.measures.findIndex((m) => m.id === t.measureId);
+              const fallbackM = newScore.measures[Math.min(newScore.measures.length - 1, Math.max(0, (t.measureNumber || 1) - 1))];
+              const measureId = mIdx >= 0 ? t.measureId : (fallbackM ? fallbackM.id : newScore.measures[0]?.id || 'm1');
+              const finalMIdx = newScore.measures.findIndex((m) => m.id === measureId);
+              return {
+                ...t,
+                id: t.id || `text_${Date.now()}_${i}`,
+                type: 'text',
+                text: t.text || t.content || '',
+                content: t.text || t.content || '',
+                measureId,
+                measureNumber: finalMIdx >= 0 ? finalMIdx + 1 : (t.measureNumber || 1),
+              };
+            }),
+          };
+          setScore(normalizedScore);
+          pushScoreState(normalizedScore);
         }}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onResetScore={(templateKey) => {
@@ -2195,6 +2366,8 @@ export default function App() {
               onEditTextAnnotation={handleEditTextAnnotation}
               onOpenAddTextModal={handleOpenAddTextModal}
               onMoveTextAnnotation={handleMoveTextAnnotation}
+              onCommitMoveTextAnnotation={handleCommitMoveTextAnnotation}
+              onUpdateTextAnnotation={handleUpdateTextAnnotation}
               onDeleteTextAnnotation={handleDeleteTextAnnotation}
             />
           </ErrorBoundary>

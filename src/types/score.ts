@@ -234,7 +234,9 @@ export interface LayoutSettings {
 
 export interface ScoreTextAnnotation {
   id: string;
+  type?: 'text';
   text: string;
+  content?: string; // Canonical alias for text
   measureId: string;
   measureNumber: number;
   beatIndex?: number; // 0-based beat index within measure

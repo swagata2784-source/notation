@@ -56,6 +56,8 @@ interface NotationRendererProps {
   onOpenAddTextModal?: (measureId: string, beatIndex: number, placement?: 'above' | 'below') => void;
   onDeleteTextAnnotation?: (textId: string) => void;
   onMoveTextAnnotation?: (textId: string, offsetX: number, offsetY: number) => void;
+  onCommitMoveTextAnnotation?: (textId: string, offsetX: number, offsetY: number) => void;
+  onUpdateTextAnnotation?: (textId: string, patch: Partial<ScoreTextAnnotation>) => void;
   visiblePageIndices?: number[];
   onPageCountCalculated?: (count: number) => void;
 }
@@ -79,6 +81,8 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
   onOpenAddTextModal,
   onDeleteTextAnnotation,
   onMoveTextAnnotation,
+  onCommitMoveTextAnnotation,
+  onUpdateTextAnnotation,
   visiblePageIndices,
   onPageCountCalculated,
 }) => {
@@ -1003,6 +1007,10 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                   className="cursor-pointer"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (toolMode === 'text') {
+                                      onOpenAddTextModal?.(measure.id, b, 'above');
+                                      return;
+                                    }
                                     if (!isLocked) {
                                       onSelectBeat(measure.id, b, 0, 'beat');
                                     }
@@ -1027,6 +1035,10 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                   className="cursor-pointer"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (toolMode === 'text') {
+                                      onOpenAddTextModal?.(measure.id, b, 'above');
+                                      return;
+                                    }
                                     if (!isLocked && effVal === 1) {
                                       onSelectBeat(measure.id, b, 0, 'note');
                                     }
@@ -1176,6 +1188,10 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                   className="cursor-pointer group/symbol"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (toolMode === 'text') {
+                                      onOpenAddTextModal?.(measure.id, b, 'below');
+                                      return;
+                                    }
                                     if (!isLocked) {
                                       onSelectBeat(measure.id, b, 0, 'symbol');
                                       if (toolMode === 'symbol' || !symbols.includes('⌣')) {
@@ -1420,7 +1436,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                           {/* Free-form Score Text Annotations for this measure */}
                           {(score.textAnnotations || [])
                             .filter(
-                              (t) => t.measureId === measure.id || t.measureNumber === measure.measureNumber
+                              (t) => t.measureId === measure.id || (!t.measureId && t.measureNumber === measure.measureNumber)
                             )
                             .map((textObj) => {
                               const isSelected =
@@ -1485,6 +1501,8 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                     const initOffsetX = textObj.offsetX || 0;
                                     const initOffsetY = textObj.offsetY || 0;
                                     let dragged = false;
+                                    let lastDx = 0;
+                                    let lastDy = 0;
 
                                     const onMouseMove = (moveEvt: MouseEvent) => {
                                       const dx = (moveEvt.clientX - startX) / zoom;
@@ -1492,18 +1510,29 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
                                         dragged = true;
                                       }
-                                      if (dragged && onMoveTextAnnotation) {
-                                        onMoveTextAnnotation(
-                                          textObj.id,
-                                          Math.round(initOffsetX + dx),
-                                          Math.round(initOffsetY + dy)
-                                        );
+                                      if (dragged) {
+                                        lastDx = dx;
+                                        lastDy = dy;
+                                        if (onMoveTextAnnotation) {
+                                          onMoveTextAnnotation(
+                                            textObj.id,
+                                            Math.round(initOffsetX + dx),
+                                            Math.round(initOffsetY + dy)
+                                          );
+                                        }
                                       }
                                     };
 
                                     const onMouseUp = () => {
                                       window.removeEventListener('mousemove', onMouseMove);
                                       window.removeEventListener('mouseup', onMouseUp);
+                                      if (dragged && onCommitMoveTextAnnotation) {
+                                        onCommitMoveTextAnnotation(
+                                          textObj.id,
+                                          Math.round(initOffsetX + lastDx),
+                                          Math.round(initOffsetY + lastDy)
+                                        );
+                                      }
                                     };
 
                                     window.addEventListener('mousemove', onMouseMove);
@@ -1529,7 +1558,47 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                       <rect x={boxX - 2} y={boxY - 2} width={4} height={4} fill="#2563eb" />
                                       <rect x={boxX + approxWidth - 2} y={boxY - 2} width={4} height={4} fill="#2563eb" />
                                       <rect x={boxX - 2} y={boxY + approxHeight - 2} width={4} height={4} fill="#2563eb" />
-                                      <rect x={boxX + approxWidth - 2} y={boxY + approxHeight - 2} width={4} height={4} fill="#2563eb" />
+                                      {/* Interactive Resize Handle on Bottom-Right */}
+                                      <rect
+                                        x={boxX + approxWidth - 3}
+                                        y={boxY + approxHeight - 3}
+                                        width={7}
+                                        height={7}
+                                        fill="#2563eb"
+                                        className="cursor-se-resize"
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          const startY = e.clientY;
+                                          const startFontSize = fontSize;
+                                          let resized = false;
+                                          let finalSize = startFontSize;
+
+                                          const onResizeMove = (moveEvt: MouseEvent) => {
+                                            const dy = (moveEvt.clientY - startY) / zoom;
+                                            const newSize = Math.max(8, Math.min(64, Math.round(startFontSize + dy * 0.5)));
+                                            if (newSize !== finalSize) {
+                                              resized = true;
+                                              finalSize = newSize;
+                                              onUpdateTextAnnotation?.(textObj.id, { fontSize: newSize });
+                                            }
+                                          };
+
+                                          const onResizeUp = () => {
+                                            window.removeEventListener('mousemove', onResizeMove);
+                                            window.removeEventListener('mouseup', onResizeUp);
+                                            if (resized && onCommitMoveTextAnnotation) {
+                                              onCommitMoveTextAnnotation(
+                                                textObj.id,
+                                                textObj.offsetX || 0,
+                                                textObj.offsetY || 0
+                                              );
+                                            }
+                                          };
+
+                                          window.addEventListener('mousemove', onResizeMove);
+                                          window.addEventListener('mouseup', onResizeUp);
+                                        }}
+                                      />
                                     </g>
                                   )}
 

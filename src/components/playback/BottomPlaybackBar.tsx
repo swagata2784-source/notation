@@ -15,6 +15,7 @@ import {
   Sliders,
   Bell,
   ChevronDown,
+  Settings2,
 } from 'lucide-react';
 
 interface BottomPlaybackBarProps {
@@ -42,6 +43,9 @@ export const BottomPlaybackBar: React.FC<BottomPlaybackBarProps> = ({
   const [accentFirstBeat, setAccentFirstBeat] = useState(audioEngine.getAccentFirstBeat());
   const [showMetronomeSettings, setShowMetronomeSettings] = useState(false);
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(
+    midiService.getSelectedDeviceId()
+  );
 
   const selectedMeasureIdx = selection?.measureId
     ? score.measures.findIndex((m) => m.id === selection.measureId)
@@ -55,6 +59,7 @@ export const BottomPlaybackBar: React.FC<BottomPlaybackBarProps> = ({
     // Initialize Web MIDI listeners
     const unsubscribeDevices = midiService.onDevicesChange((devices) => {
       setMidiDevices(devices);
+      setSelectedDeviceId(midiService.getSelectedDeviceId());
     });
 
     return () => {
@@ -310,33 +315,70 @@ export const BottomPlaybackBar: React.FC<BottomPlaybackBarProps> = ({
       {/* Input Devices: Virtual Piano & Web MIDI */}
       <div className="flex items-center space-x-2.5">
         {/* Web MIDI Keyboard Status / Setup */}
-        <button
-          onClick={() => {
-            if (onOpenMidiModal) {
-              onOpenMidiModal();
-            } else {
+        {midiDevices.length === 0 ? (
+          <button
+            id="midi-device-btn"
+            onClick={() => {
               midiService.initialize();
-            }
-          }}
-          title="Configure USB / Bluetooth MIDI Keyboards"
-          className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] transition-colors ${
-            midiDevices.length > 0
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold'
-              : 'bg-stone-100 hover:bg-stone-200 text-stone-700 border-stone-200'
-          }`}
-        >
-          {midiDevices.length > 0 ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="max-w-[110px] truncate">MIDI: {midiDevices[0].name}</span>
-            </>
-          ) : (
-            <>
-              <Radio className="w-3 h-3 text-stone-500" />
-              <span>MIDI Keyboards</span>
-            </>
-          )}
-        </button>
+              if (onOpenMidiModal) onOpenMidiModal();
+            }}
+            title="MIDI: Not Connected. Click to scan for external USB/Bluetooth keyboards or open setup."
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-all cursor-pointer active:scale-95 bg-stone-100 hover:bg-stone-200 text-stone-700 border-stone-300 shadow-2xs"
+          >
+            <span className="w-2 h-2 rounded-full bg-stone-400" />
+            <span>MIDI: Not Connected</span>
+          </button>
+        ) : midiDevices.length === 1 ? (
+          <button
+            id="midi-device-btn"
+            onClick={() => {
+              if (onOpenMidiModal) onOpenMidiModal();
+            }}
+            title={`MIDI Connected: ${midiDevices[0].name} (${midiDevices[0].manufacturer}) — Click to configure`}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-all cursor-pointer active:scale-95 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300 shadow-2xs"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <span className="font-semibold max-w-[130px] truncate">
+              MIDI: {midiDevices[0].name}
+            </span>
+          </button>
+        ) : (
+          <div
+            id="midi-multi-device-control"
+            className="flex items-center space-x-1.5 bg-emerald-50 border border-emerald-300 rounded-lg px-2 py-1 shadow-2xs text-[11px]"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <span className="font-bold text-emerald-900 shrink-0">MIDI:</span>
+            <select
+              id="midi-device-select"
+              value={selectedDeviceId}
+              onChange={(e) => {
+                const newId = e.target.value;
+                setSelectedDeviceId(newId);
+                midiService.setSelectedDeviceId(newId);
+              }}
+              title="Select MIDI Input Device"
+              className="bg-white border border-emerald-300 rounded px-1.5 py-0.5 text-[11px] font-medium text-emerald-900 max-w-[120px] truncate focus:outline-hidden cursor-pointer"
+            >
+              <option value="all">All Devices ({midiDevices.length})</option>
+              {midiDevices.map((dev) => (
+                <option key={dev.id} value={dev.id}>
+                  {dev.name}
+                </option>
+              ))}
+            </select>
+            <button
+              id="midi-device-btn"
+              onClick={() => {
+                if (onOpenMidiModal) onOpenMidiModal();
+              }}
+              title="MIDI Settings"
+              className="text-emerald-700 hover:text-emerald-950 p-0.5 rounded hover:bg-emerald-100 cursor-pointer"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Virtual Piano Toggle Button */}
         <button

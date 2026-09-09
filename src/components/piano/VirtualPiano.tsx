@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Pitch, NoteStep, AccidentalType } from '../../types/score';
 import { audioEngine } from '../../services/audioEngine';
+import { midiService } from '../../services/midiService';
 import { X, Keyboard, Eye, EyeOff, Music, Volume2 } from 'lucide-react';
 
 export type PianoKeyboardSize = '61' | '76' | '88';
@@ -134,6 +135,18 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
       }
     }
   }, [isOpen, keyboardSize, whiteKeyWidth, whiteKeys]);
+
+  // Synchronize external MIDI key presses to highlight virtual keys
+  useEffect(() => {
+    const unsub = midiService.onActiveKeyChange((midiNote, isActive) => {
+      if (isActive) {
+        setActiveKeyMidi(midiNote);
+      } else {
+        setActiveKeyMidi((prev) => (prev === midiNote ? null : prev));
+      }
+    });
+    return () => unsub();
+  }, []);
 
   if (!isOpen) return null;
 

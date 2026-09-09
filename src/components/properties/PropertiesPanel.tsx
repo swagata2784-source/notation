@@ -291,7 +291,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   <div className="flex items-center space-x-1.5">
                     <Type className="w-3.5 h-3.5 text-blue-700" />
                     <span className="font-bold text-blue-900 text-[11px] uppercase tracking-wide">
-                      Selected Text
+                      Selected Text • Bar {selectedTextAnnotation.measureNumber} Beat {(selectedTextAnnotation.beatIndex ?? 0) + 1}
                     </span>
                   </div>
                   <button
@@ -321,6 +321,30 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   >
                     Edit Text
                   </button>
+                </div>
+
+                {/* Attached Measure Selection */}
+                <div>
+                  <label className="text-[10px] font-bold text-stone-600 block mb-1">Attached Measure</label>
+                  <select
+                    value={selectedTextAnnotation.measureId}
+                    onChange={(e) => {
+                      const newMId = e.target.value;
+                      const mIdx = score.measures.findIndex((m) => m.id === newMId);
+                      const newMNum = mIdx >= 0 ? mIdx + 1 : 1;
+                      onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                        measureId: newMId,
+                        measureNumber: newMNum,
+                      });
+                    }}
+                    className="w-full bg-white border border-stone-300 rounded px-2 py-1 text-xs font-medium text-stone-800"
+                  >
+                    {score.measures.map((m, idx) => (
+                      <option key={m.id} value={m.id}>
+                        Bar {idx + 1} (ID: {m.id})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Formatting: Font Size */}
@@ -595,7 +619,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 className="w-full py-1.5 px-2.5 rounded-lg border border-dashed border-stone-300 hover:border-blue-500 hover:bg-blue-50/50 text-stone-700 hover:text-blue-700 text-xs font-semibold flex items-center justify-center space-x-1.5 transition-colors"
               >
                 <Type className="w-3.5 h-3.5 text-blue-600" />
-                <span>+ Add Score Text to Beat {beatIndex + 1}</span>
+                <span>+ Add Score Text to Bar {activeMeasure?.measureNumber || 1} • Beat {beatIndex + 1}</span>
               </button>
             )}
 

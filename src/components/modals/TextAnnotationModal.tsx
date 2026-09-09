@@ -92,7 +92,10 @@ export const TextAnnotationModal: React.FC<TextAnnotationModalProps> = ({
     if (!text.trim()) return;
 
     onSaveText({
+      ...(initialData || {}),
+      type: 'text',
       text: text.trim(),
+      content: text.trim(),
       fontSize,
       fontWeight: isBold ? 'bold' : 'normal',
       fontStyle: isItalic ? 'italic' : 'normal',
