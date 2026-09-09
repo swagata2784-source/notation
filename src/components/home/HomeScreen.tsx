@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Score, SavedProject } from '../../types/score';
 import { ProjectStorageService } from '../../services/projectStorageService';
+import { ScoreMiniaturePreview } from './ScoreMiniaturePreview';
 import {
   Plus,
   FileMusic,
@@ -125,7 +126,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       </header>
 
       {/* Main Home Workspace */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8 space-y-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8 pb-16 space-y-8">
         {/* Blank Workspace Card / Welcome Action Banner */}
         <section className="bg-white rounded-2xl border border-stone-200/90 shadow-sm p-6 sm:p-8 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden">
           <div className="space-y-2 z-10 max-w-xl">
@@ -213,68 +214,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     onClick={() => handleOpenScore(project)}
                     className="group bg-white rounded-xl border border-stone-200 hover:border-amber-500/60 p-4 shadow-2xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-3 relative overflow-hidden"
                   >
-                    {/* Top: Thumbnail Preview */}
-                    <div className="w-full h-28 bg-[#faf8f4] rounded-lg border border-stone-200/80 p-2 flex flex-col items-center justify-center relative overflow-hidden group-hover:bg-[#fcfaf7] transition-colors">
-                      {/* Mini Staff SVG Thumbnail */}
-                      <svg viewBox="0 0 200 70" className="w-full h-full">
-                        {hand === 'Both' ? (
-                          <>
-                            {/* Brace line */}
-                            <line x1="12" y1="12" x2="12" y2="58" stroke="#78716c" strokeWidth="1.5" />
-                            {/* Treble lines */}
-                            {[12, 16, 20, 24, 28].map((y, i) => (
-                              <line key={`rh-${i}`} x1="12" y1={y} x2="190" y2={y} stroke="#d6d3d1" strokeWidth="0.8" />
-                            ))}
-                            {/* Bass lines */}
-                            {[42, 46, 50, 54, 58].map((y, i) => (
-                              <line key={`lh-${i}`} x1="12" y1={y} x2="190" y2={y} stroke="#d6d3d1" strokeWidth="0.8" />
-                            ))}
-                            {/* Mini clef marks */}
-                            <text x="16" y="26" fontSize="18" fill="#57534e" fontFamily="serif">𝄞</text>
-                            <text x="16" y="54" fontSize="13" fill="#57534e" fontFamily="serif">𝄢</text>
-                            {/* Barlines */}
-                            <line x1="95" y1="12" x2="95" y2="58" stroke="#a8a29e" strokeWidth="0.8" />
-                            <line x1="190" y1="12" x2="190" y2="58" stroke="#78716c" strokeWidth="1" />
-                            {/* Sample note dots */}
-                            <circle cx="50" cy="24" r="2.5" fill="#44403c" />
-                            <circle cx="70" cy="20" r="2.5" fill="#44403c" />
-                            <circle cx="120" cy="24" r="2.5" fill="#44403c" />
-                            <circle cx="140" cy="28" r="2.5" fill="#44403c" />
-                            <circle cx="50" cy="50" r="2.5" fill="#44403c" />
-                            <circle cx="120" cy="50" r="2.5" fill="#44403c" />
-                          </>
-                        ) : hand === 'RH' ? (
-                          <>
-                            <line x1="12" y1="20" x2="12" y2="50" stroke="#78716c" strokeWidth="1.5" />
-                            {[20, 26, 32, 38, 44].map((y, i) => (
-                              <line key={`rh-${i}`} x1="12" y1={y} x2="190" y2={y} stroke="#d6d3d1" strokeWidth="0.8" />
-                            ))}
-                            <text x="16" y="42" fontSize="22" fill="#57534e" fontFamily="serif">𝄞</text>
-                            <line x1="95" y1="20" x2="95" y2="44" stroke="#a8a29e" strokeWidth="0.8" />
-                            <line x1="190" y1="20" x2="190" y2="44" stroke="#78716c" strokeWidth="1" />
-                            <circle cx="50" cy="38" r="2.5" fill="#44403c" />
-                            <circle cx="70" cy="32" r="2.5" fill="#44403c" />
-                            <circle cx="120" cy="26" r="2.5" fill="#44403c" />
-                            <circle cx="140" cy="32" r="2.5" fill="#44403c" />
-                          </>
-                        ) : (
-                          <>
-                            <line x1="12" y1="20" x2="12" y2="50" stroke="#78716c" strokeWidth="1.5" />
-                            {[20, 26, 32, 38, 44].map((y, i) => (
-                              <line key={`lh-${i}`} x1="12" y1={y} x2="190" y2={y} stroke="#d6d3d1" strokeWidth="0.8" />
-                            ))}
-                            <text x="16" y="38" fontSize="18" fill="#57534e" fontFamily="serif">𝄢</text>
-                            <line x1="95" y1="20" x2="95" y2="44" stroke="#a8a29e" strokeWidth="0.8" />
-                            <line x1="190" y1="20" x2="190" y2="44" stroke="#78716c" strokeWidth="1" />
-                            <circle cx="50" cy="38" r="2.5" fill="#44403c" />
-                            <circle cx="70" cy="32" r="2.5" fill="#44403c" />
-                            <circle cx="120" cy="38" r="2.5" fill="#44403c" />
-                          </>
-                        )}
-                      </svg>
+                    {/* Top: Actual Staff Notation Thumbnail Preview */}
+                    <div className="w-full h-32 bg-[#faf8f4] rounded-lg border border-stone-200/90 p-1 flex items-center justify-center relative overflow-hidden group-hover:bg-[#fcfaf7] transition-colors shadow-2xs">
+                      <ScoreMiniaturePreview
+                        score={project.score}
+                        handTemplate={hand}
+                      />
 
                       {/* Template Badge on Thumbnail */}
-                      <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded bg-white/90 text-stone-800 border border-stone-200/80 shadow-2xs">
+                      <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded bg-white/95 text-stone-800 border border-stone-200/80 shadow-2xs pointer-events-none backdrop-blur-xs">
                         {hand === 'Both' ? 'Grand Staff (Both)' : hand === 'RH' ? 'Right Hand' : 'Left Hand'}
                       </span>
                     </div>

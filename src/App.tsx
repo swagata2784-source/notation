@@ -46,6 +46,7 @@ import { PrintStudio } from './components/print/PrintStudio';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 // Modals
+import { AddMeasuresModal } from './components/modals/AddMeasuresModal';
 import { CustomTimeSignatureModal } from './components/modals/CustomTimeSignatureModal';
 import { ChordDialogModal } from './components/modals/ChordDialogModal';
 import { KeyboardShortcutsModal } from './components/modals/KeyboardShortcutsModal';
@@ -132,6 +133,7 @@ export default function App() {
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
 
   // Modals state
+  const [isAddMeasuresModalOpen, setIsAddMeasuresModalOpen] = useState(false);
   const [isCustomTimeSigOpen, setIsCustomTimeSigOpen] = useState(false);
   const [isChordDialogOpen, setIsChordDialogOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -423,46 +425,83 @@ export default function App() {
     [score, showToast]
   );
 
-  // Add Measure at End handler
-  const handleAddMeasureAtEnd = useCallback(() => {
-    setScore((prev) => {
-      const beatsCount = prev.metadata.initialTimeSignature?.numerator || 4;
-      const rhEvents: NoteEvent[] = Array.from({ length: beatsCount }, (_, i) => ({
-        id: `rh_${Date.now()}_${i}`,
-        type: 'note',
-        pitches: [],
-        duration: 'quarter',
-      }));
-      const lhEvents: NoteEvent[] = Array.from({ length: beatsCount }, (_, i) => ({
-        id: `lh_${Date.now()}_${i}`,
-        type: 'note',
-        pitches: [],
-        duration: 'quarter',
-      }));
+  // Open Add Measures Dialog (Score -> Add Measure)
+  const handleOpenAddMeasuresModal = useCallback(() => {
+    setIsAddMeasuresModalOpen(true);
+  }, []);
 
-      const newMeasure: Measure = {
-        id: `m_${Date.now()}`,
-        measureNumber: prev.measures.length + 1,
-        barlineType: 'single',
-        chordSymbols: [],
-        rhEvents,
-        lhEvents,
-      };
+  // Add Exact Number of Measures at End handler
+  const handleAddMeasures = useCallback(
+    (count: number) => {
+      if (!count || count < 1 || !Number.isInteger(count)) return;
 
-      const newMeasures = [...prev.measures, newMeasure];
-      const updated: Score = { ...prev, measures: newMeasures };
-      pushScoreState(updated);
-      setSelection({
-        measureId: newMeasure.id,
-        staff: 'RH',
-        eventId: null,
-        beatIndex: 0,
-        subBeatIndex: 0,
+      setScore((prev) => {
+        const beatsCount = prev.metadata.initialTimeSignature?.numerator || 4;
+        const startMeasureNum = prev.measures.length + 1;
+        const baseTimestamp = Date.now();
+
+        const newMeasures: Measure[] = Array.from({ length: count }, (_, mIdx) => {
+          const mNum = startMeasureNum + mIdx;
+          const measureId = `m_${baseTimestamp}_${mIdx}_${Math.random().toString(36).substring(2, 7)}`;
+
+          const rhEvents: NoteEvent[] = Array.from({ length: beatsCount }, (_, bIdx) => ({
+            id: `rh_${baseTimestamp}_${mIdx}_${bIdx}_${Math.random().toString(36).substring(2, 7)}`,
+            type: 'note',
+            pitches: [],
+            duration: 'quarter',
+          }));
+
+          const lhEvents: NoteEvent[] = Array.from({ length: beatsCount }, (_, bIdx) => ({
+            id: `lh_${baseTimestamp}_${mIdx}_${bIdx}_${Math.random().toString(36).substring(2, 7)}`,
+            type: 'note',
+            pitches: [],
+            duration: 'quarter',
+          }));
+
+          const newM: Measure = {
+            id: measureId,
+            measureNumber: mNum,
+            barlineType: 'single',
+            chordSymbols: [],
+            rhEvents,
+            lhEvents,
+            beatNotes: {},
+            beatChords: {},
+            beatLyrics: {},
+            beatSymbols: {},
+            beatValues: {},
+          };
+          return newM;
+        });
+
+        const updatedMeasures = [...prev.measures, ...newMeasures];
+        const updated: Score = { ...prev, measures: updatedMeasures };
+
+        // Push single undoable state
+        pushScoreState(updated);
+
+        // Select first beat of first newly added measure
+        if (newMeasures.length > 0) {
+          setSelection({
+            measureId: newMeasures[0].id,
+            staff: 'RH',
+            eventId: null,
+            beatIndex: 0,
+            subBeatIndex: 0,
+          });
+        }
+
+        showToast(
+          count === 1
+            ? `Added Measure ${startMeasureNum} at end`
+            : `Added ${count} measures (${startMeasureNum}–${startMeasureNum + count - 1}) at end`
+        );
+
+        return updated;
       });
-      showToast(`Added Measure ${newMeasure.measureNumber} at end`);
-      return updated;
-    });
-  }, [pushScoreState, showToast]);
+    },
+    [pushScoreState, showToast]
+  );
 
   // Change Canonical Time Signature
   const handleChangeTimeSignature = useCallback(
@@ -1880,6 +1919,7 @@ export default function App() {
         isCustomTimeSigOpen ||
         isChordDialogOpen ||
         isShortcutsOpen ||
+        isAddMeasuresModalOpen ||
         Boolean(textModalConfig?.isOpen)
       ) {
         return;
@@ -2165,6 +2205,7 @@ export default function App() {
     isCustomTimeSigOpen,
     isChordDialogOpen,
     isShortcutsOpen,
+    isAddMeasuresModalOpen,
   ]);
 
   // Web MIDI note input listener
@@ -2200,7 +2241,7 @@ export default function App() {
   // 1. Initial Opening Screen: Clean Home/Project screen
   if (viewMode === 'home') {
     return (
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#faf8f5]">
+      <div className="flex flex-col h-screen w-screen overflow-y-auto bg-[#faf8f5]">
         <HomeScreen
           savedProjects={savedProjects}
           onOpenProject={handleSelectProject}
@@ -2277,7 +2318,7 @@ export default function App() {
         onOpenSaveAs={() => setIsSaveAsModalOpen(true)}
         onOpenProjectLibrary={() => requestOpenProject()}
         onOpenPrintStudio={() => setViewMode('print')}
-        onAddMeasure={handleAddMeasureAtEnd}
+        onAddMeasure={handleOpenAddMeasuresModal}
         onOpenCustomTimeSignature={() => setIsCustomTimeSigOpen(true)}
         onChangeTimeSignature={handleChangeTimeSignature}
         onOpenChordDialog={() => setIsChordDialogOpen(true)}
@@ -2450,6 +2491,13 @@ export default function App() {
       />
 
       {/* MODALS */}
+      <AddMeasuresModal
+        isOpen={isAddMeasuresModalOpen}
+        onClose={() => setIsAddMeasuresModalOpen(false)}
+        onAdd={handleAddMeasures}
+        defaultCount={4}
+      />
+
       <CustomTimeSignatureModal
         isOpen={isCustomTimeSigOpen}
         onClose={() => setIsCustomTimeSigOpen(false)}

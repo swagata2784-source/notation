@@ -743,12 +743,11 @@ export const Header: React.FC<HeaderProps> = ({
                   onClick={() => {
                     onAddMeasure?.();
                     setActiveMenu(null);
-                    showToast('Added Measure at End');
                   }}
                   className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center space-x-2 font-medium text-stone-900"
                 >
                   <PlusCircle className="w-3.5 h-3.5 text-stone-600" />
-                  <span>Add Measure at End</span>
+                  <span>Add Measure</span>
                 </button>
 
                 <div className="my-1 border-t border-stone-100" />
