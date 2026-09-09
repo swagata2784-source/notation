@@ -190,11 +190,18 @@ export default function App() {
     midiService.setKeySignature(score.metadata.initialKeySignature);
   }, [score.metadata.initialKeySignature]);
 
+  useEffect(() => {
+    midiService.setSelectedChannel(selectedChannel);
+  }, [selectedChannel]);
+
   // Auto-initialize Web MIDI on mount
   useEffect(() => {
     midiService.initialize().catch((err) => {
       console.warn('MIDI initialization note:', err);
     });
+    return () => {
+      midiService.dispose();
+    };
   }, []);
 
   // Undo / Redo

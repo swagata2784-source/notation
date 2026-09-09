@@ -408,6 +408,30 @@ export const MidiDeviceModal: React.FC<MidiDeviceModalProps> = ({
             )}
           </div>
 
+          {/* MIDI Channel & Filtering */}
+          <div className="pt-2 border-t border-stone-200 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-stone-800 text-xs">MIDI Channel</span>
+              <span className="text-[10px] text-stone-500">Filter specific channel or listen to all</span>
+            </div>
+            <select
+              value={selectedChannel}
+              onChange={(e) => {
+                const ch = parseInt(e.target.value, 10);
+                onSetSelectedChannel(ch);
+                midiService.setSelectedChannel(ch);
+              }}
+              className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-amber-500 cursor-pointer"
+            >
+              <option value="0">All Channels (Omni / Dual-Voice Protected)</option>
+              {Array.from({ length: 16 }, (_, i) => i + 1).map((ch) => (
+                <option key={ch} value={ch}>
+                  Channel {ch}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* MIDI Input Mode */}
           <div className="pt-2 border-t border-stone-200 space-y-1.5">
             <span className="font-bold text-stone-800 block">MIDI Mode</span>
@@ -424,7 +448,7 @@ export const MidiDeviceModal: React.FC<MidiDeviceModalProps> = ({
                 <div>
                   <span className="block font-bold">Note Entry Mode</span>
                   <span className="text-[10px] text-stone-500">
-                    Inserts played notes directly into score
+                    1 key press = exactly 1 notation note
                   </span>
                 </div>
               </button>

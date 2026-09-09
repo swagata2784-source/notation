@@ -15,22 +15,26 @@ export interface MidiActivity {
   timestamp: number;
 }
 
-type NoteListener = (pitch: Pitch, velocity: number) => void;
-type NoteOffListener = (noteNumber: number) => void;
-type ActiveKeyListener = (noteNumber: number, active: boolean) => void;
-type DeviceListener = (devices: MidiDevice[]) => void;
-type ActivityListener = (activity: MidiActivity) => void;
+export type NoteListener = (pitch: Pitch, velocity: number) => void;
+export type NoteOffListener = (noteNumber: number) => void;
+export type ActiveKeyListener = (noteNumber: number, active: boolean) => void;
+export type DeviceListener = (devices: MidiDevice[]) => void;
+export type ActivityListener = (activity: MidiActivity) => void;
 
 class MidiService {
   private midiAccess: any = null;
-  private noteListeners: NoteListener[] = [];
-  private noteOffListeners: NoteOffListener[] = [];
-  private activeKeyListeners: ActiveKeyListener[] = [];
-  private deviceListeners: DeviceListener[] = [];
-  private activityListeners: ActivityListener[] = [];
+
+  // Single canonical note listener prevents listener accumulation or duplicate routing
+  private canonicalNoteListener: NoteListener | null = null;
+  private noteOffListeners: Set<NoteOffListener> = new Set();
+  private activeKeyListeners: Set<ActiveKeyListener> = new Set();
+  private deviceListeners: Set<DeviceListener> = new Set();
+  private activityListeners: Set<ActivityListener> = new Set();
+
   private isSupported = false;
   private connectedDevices: MidiDevice[] = [];
-  private selectedDeviceId = 'all';
+  private selectedDeviceId: string = '';
+  private selectedChannel: number = 0; // 0 = all/omni, 1-16 = specific channel
   private isVirtualEnabled = false;
   private lastError: string | null = null;
   private isIframeRestricted = false;
@@ -39,6 +43,18 @@ class MidiService {
   private keySignature = 'C_major';
   private isInitializing = false;
   private hasInitialized = false;
+
+  // Inputs currently bearing an active onmidimessage listener
+  private attachedInputs: Set<any> = new Set();
+
+  // Duplicate-event & hardware bounce protection
+  private activePhysicalKeys: Set<number> = new Set();
+  private lastNoteOnTimestamp: Map<number, number> = new Map();
+  private lastNoteOffTimestamp: Map<number, number> = new Map();
+
+  // Diagnostic metrics
+  private totalRawEvents = 0;
+  private canonicalNoteEntryCount = 0;
 
   constructor() {
     this.isSupported = typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator;
@@ -65,9 +81,18 @@ class MidiService {
   }
 
   public setSelectedDeviceId(id: string) {
+    if (this.selectedDeviceId === id) return;
     this.selectedDeviceId = id;
     this.attachInputs();
     this.notifyDeviceListeners();
+  }
+
+  public getSelectedChannel(): number {
+    return this.selectedChannel;
+  }
+
+  public setSelectedChannel(channel: number) {
+    this.selectedChannel = channel;
   }
 
   public getLastActivity(): MidiActivity | null {
@@ -80,6 +105,10 @@ class MidiService {
 
   public setKeySignature(key: string) {
     this.keySignature = key;
+  }
+
+  public getCanonicalNoteEntryCount(): number {
+    return this.canonicalNoteEntryCount;
   }
 
   public async initialize(): Promise<boolean> {
@@ -138,24 +167,37 @@ class MidiService {
 
   public triggerVirtualNote(pitch: Pitch, velocity: number = 95) {
     const midi = this.pitchToMidiNote(pitch);
+    const now = performance.now();
+
+    // Prevent virtual key re-triggering while already pressed
+    if (this.activePhysicalKeys.has(midi)) return;
+    this.activePhysicalKeys.add(midi);
+    this.lastNoteOnTimestamp.set(midi, now);
+    this.canonicalNoteEntryCount++;
+
     this.lastActivity = {
       noteNumber: midi,
       pitch,
       velocity,
       timestamp: Date.now(),
     };
-    this.activityListeners.forEach((l) => l(this.lastActivity!));
-    this.activeKeyListeners.forEach((l) => l(midi, true));
-    // Broadcast note into canonical note-entry function
-    this.noteListeners.forEach((l) => l(pitch, velocity));
+    this.notifyActivity(this.lastActivity);
+    this.notifyActiveKey(midi, true);
+
+    if (this.canonicalNoteListener) {
+      this.canonicalNoteListener(pitch, velocity);
+    }
 
     setTimeout(() => {
-      this.activeKeyListeners.forEach((l) => l(midi, false));
+      this.activePhysicalKeys.delete(midi);
+      this.lastNoteOffTimestamp.set(midi, performance.now());
+      this.notifyActiveKey(midi, false);
+      this.notifyNoteOff(midi);
     }, 250);
   }
 
   private handleStateChange = () => {
-    // Hotplugging handler: refresh devices and re-attach listeners automatically
+    // Hotplugging lifecycle: refresh device inventory and re-attach listener
     this.updateDevices();
     this.attachInputs();
   };
@@ -186,6 +228,24 @@ class MidiService {
     }
 
     this.connectedDevices = devices;
+
+    // If selectedDeviceId is not set or no longer present in devices, pick the first valid device
+    const hardwareDevices = devices.filter((d) => !d.isVirtual);
+    const hasCurrent =
+      this.selectedDeviceId === 'all' ||
+      devices.some((d) => d.id === this.selectedDeviceId);
+
+    if (!hasCurrent) {
+      if (hardwareDevices.length > 0) {
+        // Automatically default to the single first physical device (avoids dual-port echo)
+        this.selectedDeviceId = hardwareDevices[0].id;
+      } else if (devices.length > 0) {
+        this.selectedDeviceId = devices[0].id;
+      } else {
+        this.selectedDeviceId = '';
+      }
+    }
+
     this.notifyDeviceListeners();
   }
 
@@ -193,7 +253,39 @@ class MidiService {
     this.deviceListeners.forEach((l) => l(this.connectedDevices));
   }
 
+  private notifyActivity(activity: MidiActivity) {
+    this.activityListeners.forEach((l) => l(activity));
+  }
+
+  private notifyActiveKey(noteNumber: number, active: boolean) {
+    this.activeKeyListeners.forEach((l) => l(noteNumber, active));
+  }
+
+  private notifyNoteOff(noteNumber: number) {
+    this.noteOffListeners.forEach((l) => l(noteNumber));
+  }
+
+  /**
+   * Detaches midimessage handlers from all currently attached input ports
+   */
+  private detachAllInputs() {
+    this.attachedInputs.forEach((input) => {
+      try {
+        input.onmidimessage = null;
+      } catch (e) {
+        // ignore detached port errors
+      }
+    });
+    this.attachedInputs.clear();
+  }
+
+  /**
+   * Attaches the single canonical handleMidiMessage listener to the selected MIDI input.
+   * Cleans up all previous listeners first to guarantee zero duplicate listeners.
+   */
   private attachInputs() {
+    this.detachAllInputs();
+
     if (!this.midiAccess || !this.midiAccess.inputs) return;
 
     const availableInputs: any[] = [];
@@ -201,68 +293,126 @@ class MidiService {
       availableInputs.push(input);
     });
 
-    // If selected device no longer exists, fallback to 'all'
-    if (
-      this.selectedDeviceId !== 'all' &&
-      this.selectedDeviceId !== 'virtual-midi-device' &&
-      !availableInputs.some((i) => i.id === this.selectedDeviceId)
-    ) {
-      this.selectedDeviceId = 'all';
+    if (availableInputs.length === 0) return;
+
+    // If selectedDeviceId is empty, select the first available input
+    if (!this.selectedDeviceId) {
+      this.selectedDeviceId = availableInputs[0].id;
     }
 
-    availableInputs.forEach((input: any) => {
-      const isTarget =
-        this.selectedDeviceId === 'all' || this.selectedDeviceId === input.id;
-      const isConnected = input.state === 'connected';
-
-      if (isTarget && isConnected) {
-        // Clean idempotent listener attachment
-        input.onmidimessage = this.handleMidiMessage;
-      } else {
-        // Clean up previous listeners to prevent duplicate events or memory leaks
-        input.onmidimessage = null;
+    if (this.selectedDeviceId === 'all') {
+      // If user explicitly chose "All Devices (Merge)"
+      availableInputs.forEach((input) => {
+        if (input.state === 'connected') {
+          input.onmidimessage = this.handleMidiMessage;
+          this.attachedInputs.add(input);
+        }
+      });
+    } else {
+      // Default & Recommended: attach ONLY to the single selected device
+      const target = availableInputs.find((i) => i.id === this.selectedDeviceId);
+      if (target && target.state === 'connected') {
+        target.onmidimessage = this.handleMidiMessage;
+        this.attachedInputs.add(target);
       }
-    });
+    }
   }
 
+  /**
+   * The ONE and ONLY canonical Web MIDI message parser & dispatcher.
+   * Enforces strict duplicate-event prevention, key-down tracking, and debounce guards.
+   */
   private handleMidiMessage = (event: any) => {
     if (!event || !event.data || event.data.length < 2) return;
 
+    this.totalRawEvents++;
     const data = event.data;
-    const status = data[0];
+    const statusByte = data[0];
     const noteNumber = data[1];
     const velocity = data.length > 2 ? data[2] : 64;
 
-    const command = status >> 4;
-    // 0x9 = Note On, 0x8 = Note Off
-    const isNoteOn = command === 9 && velocity > 0;
-    const isNoteOff = command === 8 || (command === 9 && velocity === 0);
+    const command = statusByte >> 4;
+    const channel = (statusByte & 0x0f) + 1;
 
-    if (isNoteOn) {
+    // Filter by MIDI Channel if user selected a specific channel (1-16)
+    if (this.selectedChannel !== 0 && channel !== this.selectedChannel) {
+      return;
+    }
+
+    // Standard MIDI specification:
+    // Command 9 (0x90) with velocity > 0 is Note On.
+    // Command 8 (0x80) OR Command 9 with velocity === 0 is Note Off.
+    const isTrueNoteOn = command === 9 && velocity > 0;
+    const isTrueNoteOff = command === 8 || (command === 9 && velocity === 0);
+
+    const now = performance.now();
+
+    // 1. HANDLE NOTE OFF
+    if (isTrueNoteOff) {
+      this.activePhysicalKeys.delete(noteNumber);
+      this.lastNoteOffTimestamp.set(noteNumber, now);
+
+      // Release key illumination on on-screen piano
+      this.notifyActiveKey(noteNumber, false);
+      this.notifyNoteOff(noteNumber);
+
+      // CRITICAL: A Note Off event NEVER inserts a note into the score. Return immediately.
+      return;
+    }
+
+    // 2. HANDLE NOTE ON
+    if (isTrueNoteOn) {
+      // GUARD A: Key Already Depressed
+      // If the user physically pressed C4 once and is holding it down, or if a secondary port /
+      // secondary channel (e.g. dual voice on a piano) sends a second Note On for the same note:
+      // it is already active. Suppress the duplicate!
+      if (this.activePhysicalKeys.has(noteNumber)) {
+        return;
+      }
+
+      // GUARD B: Hardware Multi-Port / Echo Debounce Window
+      // Real human fingers cannot strike the same piano key twice within 65 milliseconds.
+      // Any Note On arriving within 65ms of the previous Note On for the same note number is a
+      // driver echo, dual port duplicate, or key bounce.
+      const lastOnTime = this.lastNoteOnTimestamp.get(noteNumber) || 0;
+      if (now - lastOnTime < 65) {
+        return;
+      }
+
+      // GUARD C: Switch Chatter / Release Bounce Guard
+      // If a Note On arrives within 25ms of a Note Off for the exact same note, suppress contact chatter.
+      const lastOffTime = this.lastNoteOffTimestamp.get(noteNumber) || 0;
+      if (now - lastOffTime < 25) {
+        return;
+      }
+
+      // VALID UNIQUE PHYSICAL KEY PRESS
+      this.activePhysicalKeys.add(noteNumber);
+      this.lastNoteOnTimestamp.set(noteNumber, now);
+      this.canonicalNoteEntryCount++;
+
       const pitch = this.midiNoteToPitch(
         noteNumber,
         this.accidentalPreference,
         this.keySignature
       );
 
-      // Record last activity for UI feedback
+      // Record activity for UI monitor
       this.lastActivity = {
         noteNumber,
         pitch,
         velocity,
         timestamp: Date.now(),
       };
-      this.activityListeners.forEach((l) => l(this.lastActivity!));
+      this.notifyActivity(this.lastActivity);
 
-      // Active key state for on-screen piano visual feedback
-      this.activeKeyListeners.forEach((l) => l(noteNumber, true));
+      // Illuminate key on virtual piano
+      this.notifyActiveKey(noteNumber, true);
 
-      // Forward to canonical note entry
-      this.noteListeners.forEach((l) => l(pitch, velocity));
-    } else if (isNoteOff) {
-      // Release key visual state; NEVER insert a score note on Note Off
-      this.activeKeyListeners.forEach((l) => l(noteNumber, false));
-      this.noteOffListeners.forEach((l) => l(noteNumber));
+      // Route to the ONE canonical note-entry listener
+      if (this.canonicalNoteListener) {
+        this.canonicalNoteListener(pitch, velocity);
+      }
     }
   };
 
@@ -368,47 +518,64 @@ class MidiService {
     return flatKeys.includes(key);
   }
 
+  /**
+   * Registers the single canonical note listener for workspace note entry.
+   * Automatically replaces any previous listener to ensure exactly one listener exists.
+   */
   public onNote(listener: NoteListener): () => void {
-    this.noteListeners.push(listener);
+    this.canonicalNoteListener = listener;
     return () => {
-      this.noteListeners = this.noteListeners.filter((l) => l !== listener);
+      if (this.canonicalNoteListener === listener) {
+        this.canonicalNoteListener = null;
+      }
     };
   }
 
   public onNoteOff(listener: NoteOffListener): () => void {
-    this.noteOffListeners.push(listener);
+    this.noteOffListeners.add(listener);
     return () => {
-      this.noteOffListeners = this.noteOffListeners.filter((l) => l !== listener);
+      this.noteOffListeners.delete(listener);
     };
   }
 
   public onActiveKeyChange(listener: ActiveKeyListener): () => void {
-    this.activeKeyListeners.push(listener);
+    this.activeKeyListeners.add(listener);
     return () => {
-      this.activeKeyListeners = this.activeKeyListeners.filter((l) => l !== listener);
+      this.activeKeyListeners.delete(listener);
     };
   }
 
   public onDevicesChange(listener: DeviceListener): () => void {
-    this.deviceListeners.push(listener);
+    this.deviceListeners.add(listener);
     listener(this.connectedDevices);
     return () => {
-      this.deviceListeners = this.deviceListeners.filter((l) => l !== listener);
+      this.deviceListeners.delete(listener);
     };
   }
 
   public onActivity(listener: ActivityListener): () => void {
-    this.activityListeners.push(listener);
+    this.activityListeners.add(listener);
     if (this.lastActivity) {
       listener(this.lastActivity);
     }
     return () => {
-      this.activityListeners = this.activityListeners.filter((l) => l !== listener);
+      this.activityListeners.delete(listener);
     };
   }
 
   public getConnectedDevices(): MidiDevice[] {
     return this.connectedDevices;
+  }
+
+  /**
+   * Cleanup on unmount or reset
+   */
+  public dispose() {
+    this.detachAllInputs();
+    this.canonicalNoteListener = null;
+    this.activePhysicalKeys.clear();
+    this.lastNoteOnTimestamp.clear();
+    this.lastNoteOffTimestamp.clear();
   }
 }
 
