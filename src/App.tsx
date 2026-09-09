@@ -147,10 +147,13 @@ export default function App() {
   const [textModalConfig, setTextModalConfig] = useState<{
     isOpen: boolean;
     initialData?: Partial<ScoreTextAnnotation>;
-    measureId: string;
-    measureNumber: number;
-    beatIndex: number;
-    placement: 'above' | 'below' | 'free';
+    measureId?: string;
+    measureNumber?: number;
+    beatIndex?: number;
+    placement?: 'above' | 'below' | 'free';
+    pageIndex?: number;
+    x?: number;
+    y?: number;
   } | null>(null);
   const [appToast, setAppToast] = useState<string | null>(null);
 
@@ -1546,13 +1549,15 @@ export default function App() {
     [selection.measureId, score, pushScoreState, showToast]
   );
 
-  // Text Annotation Handlers
+  // Text Annotation Handlers (Page-level, Unlimited, Independent)
   const handleDeleteTextAnnotation = useCallback(
     (textId: string) => {
       setScore((prev) => {
+        const remaining = (prev.textObjects || prev.textAnnotations || []).filter((t) => t.id !== textId);
         const updatedScore: Score = {
           ...prev,
-          textAnnotations: (prev.textAnnotations || []).filter((t) => t.id !== textId),
+          textObjects: remaining,
+          textAnnotations: remaining,
         };
         pushScoreState(updatedScore);
         return updatedScore;
@@ -1563,7 +1568,7 @@ export default function App() {
         selectionType: sel.textAnnotationId === textId || sel.eventId === textId ? 'beat' : sel.selectionType,
         eventId: sel.eventId === textId ? null : sel.eventId,
       }));
-      showToast('Text annotation deleted');
+      showToast('Text deleted');
     },
     [pushScoreState, showToast]
   );
@@ -1572,30 +1577,19 @@ export default function App() {
     (annotationData: Partial<ScoreTextAnnotation>) => {
       let targetId = annotationData.id;
       setScore((prev) => {
-        const existing = prev.textAnnotations || [];
+        const existing = prev.textObjects || prev.textAnnotations || [];
         targetId = targetId || `text_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const isEditing = existing.some((t) => t.id === targetId);
 
-        // Resolve exact target measure
-        let targetMeasureId = annotationData.measureId;
-        if (!targetMeasureId && isEditing) {
-          targetMeasureId = existing.find((t) => t.id === targetId)?.measureId;
-        }
-        if (!targetMeasureId && selection.measureId && prev.measures.some((m) => m.id === selection.measureId)) {
-          targetMeasureId = selection.measureId;
-        }
-        if (!targetMeasureId) {
-          targetMeasureId = prev.measures[0]?.id || 'm1';
-        }
-
-        const measIndex = prev.measures.findIndex((m) => m.id === targetMeasureId);
-        const targetMeasure = measIndex >= 0 ? prev.measures[measIndex] : prev.measures[0];
-        const canonicalMeasureId = targetMeasure ? targetMeasure.id : targetMeasureId;
-        const canonicalMeasureNumber = measIndex >= 0 ? measIndex + 1 : (targetMeasure?.measureNumber || 1);
-
-        const targetBeatIndex = annotationData.beatIndex !== undefined
-          ? annotationData.beatIndex
-          : (selection.beatIndex !== undefined ? selection.beatIndex : 0);
+        const pageIndex = annotationData.pageIndex !== undefined
+          ? annotationData.pageIndex
+          : (existing.find((t) => t.id === targetId)?.pageIndex ?? 0);
+        const x = annotationData.x !== undefined
+          ? annotationData.x
+          : (existing.find((t) => t.id === targetId)?.x ?? 120);
+        const y = annotationData.y !== undefined
+          ? annotationData.y
+          : (existing.find((t) => t.id === targetId)?.y ?? 120);
 
         let updated: ScoreTextAnnotation[];
         if (isEditing) {
@@ -1608,9 +1602,9 @@ export default function App() {
               type: 'text',
               text: annotationData.text !== undefined ? annotationData.text : t.text,
               content: annotationData.text !== undefined ? annotationData.text : (annotationData.content || t.text),
-              measureId: canonicalMeasureId,
-              measureNumber: canonicalMeasureNumber,
-              beatIndex: targetBeatIndex,
+              pageIndex,
+              x,
+              y,
             } as ScoreTextAnnotation;
           });
         } else {
@@ -1619,25 +1613,25 @@ export default function App() {
             type: 'text',
             text: annotationData.text || annotationData.content || '',
             content: annotationData.text || annotationData.content || '',
-            measureId: canonicalMeasureId,
-            measureNumber: canonicalMeasureNumber,
-            beatIndex: targetBeatIndex,
-            subBeatIndex: annotationData.subBeatIndex,
-            placement: annotationData.placement || 'above',
-            offsetX: annotationData.offsetX ?? 0,
-            offsetY: annotationData.offsetY ?? 0,
+            pageIndex,
+            x,
+            y,
             fontSize: annotationData.fontSize ?? 14,
             fontWeight: annotationData.fontWeight ?? 'normal',
             fontStyle: annotationData.fontStyle ?? 'normal',
             textDecoration: annotationData.textDecoration ?? 'none',
             textAlign: annotationData.textAlign ?? 'left',
             color: annotationData.color ?? '#0f172a',
+            width: annotationData.width,
+            height: annotationData.height,
+            rotation: annotationData.rotation ?? 0,
           };
           updated = [...existing, newAnnotation];
         }
 
         const updatedScore: Score = {
           ...prev,
+          textObjects: updated,
           textAnnotations: updated,
         };
         pushScoreState(updatedScore);
@@ -1654,19 +1648,22 @@ export default function App() {
       }
 
       setTextModalConfig(null);
-      showToast(annotationData.id ? 'Text updated' : 'Text added to score');
+      showToast(annotationData.id ? 'Text updated' : 'Text added to page');
     },
-    [selection, pushScoreState, showToast]
+    [pushScoreState, showToast]
   );
 
   const handleUpdateTextAnnotation = useCallback(
     (textId: string, patch: Partial<ScoreTextAnnotation>) => {
       setScore((prev) => {
+        const existing = prev.textObjects || prev.textAnnotations || [];
+        const updated = existing.map((t) =>
+          t.id === textId ? { ...t, ...patch } : t
+        );
         const updatedScore: Score = {
           ...prev,
-          textAnnotations: (prev.textAnnotations || []).map((t) =>
-            t.id === textId ? { ...t, ...patch } : t
-          ),
+          textObjects: updated,
+          textAnnotations: updated,
         };
         pushScoreState(updatedScore);
         return updatedScore;
@@ -1675,23 +1672,31 @@ export default function App() {
     [pushScoreState]
   );
 
-  const handleMoveTextAnnotation = useCallback((textId: string, offsetX: number, offsetY: number) => {
-    setScore((prev) => ({
-      ...prev,
-      textAnnotations: (prev.textAnnotations || []).map((t) =>
-        t.id === textId ? { ...t, offsetX, offsetY } : t
-      ),
-    }));
+  const handleMoveTextAnnotation = useCallback((textId: string, x: number, y: number) => {
+    setScore((prev) => {
+      const existing = prev.textObjects || prev.textAnnotations || [];
+      const updated = existing.map((t) =>
+        t.id === textId ? { ...t, x, y } : t
+      );
+      return {
+        ...prev,
+        textObjects: updated,
+        textAnnotations: updated,
+      };
+    });
   }, []);
 
   const handleCommitMoveTextAnnotation = useCallback(
-    (textId: string, offsetX: number, offsetY: number) => {
+    (textId: string, x: number, y: number) => {
       setScore((prev) => {
+        const existing = prev.textObjects || prev.textAnnotations || [];
+        const updated = existing.map((t) =>
+          t.id === textId ? { ...t, x, y } : t
+        );
         const updatedScore: Score = {
           ...prev,
-          textAnnotations: (prev.textAnnotations || []).map((t) =>
-            t.id === textId ? { ...t, offsetX, offsetY } : t
-          ),
+          textObjects: updated,
+          textAnnotations: updated,
         };
         pushScoreState(updatedScore);
         return updatedScore;
@@ -1702,67 +1707,62 @@ export default function App() {
 
   const handleSelectTextAnnotation = useCallback(
     (textId: string) => {
-      const textObj = (score.textAnnotations || []).find((t) => t.id === textId);
       setSelection((prev) => ({
         ...prev,
         textAnnotationId: textId,
         selectionType: 'text',
         eventId: textId,
-        measureId: textObj?.measureId || prev.measureId,
-        beatIndex: textObj?.beatIndex !== undefined ? textObj.beatIndex : prev.beatIndex,
       }));
     },
-    [score.textAnnotations]
+    []
   );
 
   const handleEditTextAnnotation = useCallback(
     (textAnnotation: ScoreTextAnnotation) => {
-      const measIndex = score.measures.findIndex((m) => m.id === textAnnotation.measureId);
-      const meas = measIndex >= 0 ? score.measures[measIndex] : score.measures[0];
-      const validMeasureNumber = measIndex >= 0 ? measIndex + 1 : (meas?.measureNumber || textAnnotation.measureNumber || 1);
-
       setTextModalConfig({
         isOpen: true,
-        initialData: {
-          ...textAnnotation,
-          measureNumber: validMeasureNumber,
-        },
-        measureId: textAnnotation.measureId,
-        measureNumber: validMeasureNumber,
-        beatIndex: textAnnotation.beatIndex !== undefined ? textAnnotation.beatIndex : 0,
-        placement: textAnnotation.placement || 'above',
+        initialData: textAnnotation,
+        pageIndex: textAnnotation.pageIndex ?? 0,
+        x: textAnnotation.x ?? 120,
+        y: textAnnotation.y ?? 120,
       });
     },
-    [score.measures]
+    []
   );
 
   const handleOpenAddTextModal = useCallback(
-    (measureId: string, beatIndex: number, placement?: 'above' | 'below') => {
-      const measIndex = score.measures.findIndex((m) => m.id === measureId);
-      const meas = measIndex >= 0 ? score.measures[measIndex] : score.measures[0];
-      const validMeasureId = meas ? meas.id : measureId;
-      const validMeasureNumber = measIndex >= 0 ? measIndex + 1 : (meas?.measureNumber || 1);
+    (targetOrMeasureId?: any, beatIndex?: number, placement?: 'above' | 'below') => {
+      if (typeof targetOrMeasureId === 'object' && targetOrMeasureId !== null) {
+        setTextModalConfig({
+          isOpen: true,
+          initialData: {
+            pageIndex: targetOrMeasureId.pageIndex ?? 0,
+            x: targetOrMeasureId.x ?? 120,
+            y: targetOrMeasureId.y ?? 120,
+          },
+          pageIndex: targetOrMeasureId.pageIndex ?? 0,
+          x: targetOrMeasureId.x ?? 120,
+          y: targetOrMeasureId.y ?? 120,
+        });
+        return;
+      }
 
       setTextModalConfig({
         isOpen: true,
         initialData: {
-          measureId: validMeasureId,
-          measureNumber: validMeasureNumber,
+          pageIndex: 0,
+          x: 120,
+          y: 120,
+          measureId: typeof targetOrMeasureId === 'string' ? targetOrMeasureId : undefined,
           beatIndex,
           placement: placement || 'above',
         },
-        measureId: validMeasureId,
-        measureNumber: validMeasureNumber,
-        beatIndex,
-        placement: placement || 'above',
+        pageIndex: 0,
+        x: 120,
+        y: 120,
       });
-      setSelection((sel) => ({
-        ...sel,
-        measureId: validMeasureId,
-        beatIndex,
-      }));
     },
-    [score.measures]
+    []
   );
 
   // Delete Selected Event (volta, chord, lyric, text annotation, or note/beat)
@@ -2688,14 +2688,13 @@ export default function App() {
           onDeleteText={handleDeleteTextAnnotation}
           initialData={
             textModalConfig.initialData || {
-              measureId: textModalConfig.measureId,
-              measureNumber: textModalConfig.measureNumber,
-              beatIndex: textModalConfig.beatIndex,
-              placement: textModalConfig.placement,
+              pageIndex: textModalConfig.pageIndex ?? 0,
+              x: textModalConfig.x ?? 120,
+              y: textModalConfig.y ?? 120,
             }
           }
           targetMeasureNumber={textModalConfig.measureNumber}
-          targetBeatNumber={textModalConfig.beatIndex + 1}
+          targetBeatNumber={textModalConfig.beatIndex !== undefined ? textModalConfig.beatIndex + 1 : undefined}
         />
       )}
     </div>

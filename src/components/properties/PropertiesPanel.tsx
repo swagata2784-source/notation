@@ -135,8 +135,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const beatIndex = selection.beatIndex !== undefined ? selection.beatIndex : 0;
   const subBeatIndex = selection.subBeatIndex || 0;
 
-  // Selected Text Annotation
-  const selectedTextAnnotation = (score.textAnnotations || []).find(
+  // Selected Text Annotation (Page-level independent text object)
+  const allText = score.textObjects || score.textAnnotations || [];
+  const selectedTextAnnotation = allText.find(
     (t) =>
       t.id === selection.textAnnotationId ||
       (selection.selectionType === 'text' && t.id === selection.eventId)
@@ -286,12 +287,12 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
           <>
             {/* Selected Score Text Annotation Controls */}
             {selectedTextAnnotation && (
-              <div className="bg-blue-50/80 rounded-lg p-2.5 border border-blue-200 shadow-2xs space-y-2">
+              <div className="bg-blue-50/80 rounded-lg p-2.5 border border-blue-200 shadow-2xs space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-1.5">
                     <Type className="w-3.5 h-3.5 text-blue-700" />
                     <span className="font-bold text-blue-900 text-[11px] uppercase tracking-wide">
-                      Selected Text • Bar {selectedTextAnnotation.measureNumber} Beat {(selectedTextAnnotation.beatIndex ?? 0) + 1}
+                      Page {(selectedTextAnnotation.pageIndex ?? 0) + 1} Text Object
                     </span>
                   </div>
                   <button
@@ -308,12 +309,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   <span
                     className="font-medium text-stone-900 truncate max-w-[170px]"
                     style={{
+                      fontSize: `${Math.min(16, selectedTextAnnotation.fontSize || 14)}px`,
                       fontWeight: selectedTextAnnotation.fontWeight || 'normal',
                       fontStyle: selectedTextAnnotation.fontStyle || 'normal',
                       textDecoration: selectedTextAnnotation.textDecoration || 'none',
+                      color: selectedTextAnnotation.color || '#0f172a',
                     }}
                   >
-                    "{selectedTextAnnotation.text}"
+                    "{selectedTextAnnotation.text || selectedTextAnnotation.content}"
                   </span>
                   <button
                     onClick={() => onEditTextAnnotation?.(selectedTextAnnotation)}
@@ -323,35 +326,119 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   </button>
                 </div>
 
-                {/* Attached Measure Selection */}
-                <div>
-                  <label className="text-[10px] font-bold text-stone-600 block mb-1">Attached Measure</label>
-                  <select
-                    value={selectedTextAnnotation.measureId}
-                    onChange={(e) => {
-                      const newMId = e.target.value;
-                      const mIdx = score.measures.findIndex((m) => m.id === newMId);
-                      const newMNum = mIdx >= 0 ? mIdx + 1 : 1;
-                      onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
-                        measureId: newMId,
-                        measureNumber: newMNum,
-                      });
-                    }}
-                    className="w-full bg-white border border-stone-300 rounded px-2 py-1 text-xs font-medium text-stone-800"
-                  >
-                    {score.measures.map((m, idx) => (
-                      <option key={m.id} value={m.id}>
-                        Bar {idx + 1} (ID: {m.id})
-                      </option>
-                    ))}
-                  </select>
+                {/* Page Position Coordinates */}
+                <div className="bg-white/80 rounded p-2 border border-blue-100 space-y-1.5">
+                  <span className="text-[10px] font-bold text-stone-600 uppercase tracking-wide block">
+                    Page Coordinates
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div>
+                      <label className="text-[9px] text-stone-500 font-medium block">Page</label>
+                      <select
+                        value={selectedTextAnnotation.pageIndex ?? 0}
+                        onChange={(e) =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            pageIndex: Number(e.target.value),
+                          })
+                        }
+                        className="w-full bg-white border border-stone-200 rounded px-1.5 py-1 text-xs font-semibold text-stone-800"
+                      >
+                        {[0, 1, 2, 3, 4].map((p) => (
+                          <option key={p} value={p}>
+                            Page {p + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-stone-500 font-medium block">X (px)</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="1200"
+                        value={Math.round(selectedTextAnnotation.x ?? 120)}
+                        onChange={(e) =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            x: Number(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-white border border-stone-200 rounded px-1.5 py-1 text-xs font-medium text-stone-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-stone-500 font-medium block">Y (px)</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="1600"
+                        value={Math.round(selectedTextAnnotation.y ?? 120)}
+                        onChange={(e) =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            y: Number(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-white border border-stone-200 rounded px-1.5 py-1 text-xs font-medium text-stone-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Position Nudge Arrows */}
+                  <div className="pt-1 flex items-center justify-between text-[10px] text-stone-600">
+                    <span className="text-[9px] text-stone-500 font-medium">Nudge ±10px:</span>
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            x: Math.max(10, (selectedTextAnnotation.x ?? 120) - 10),
+                          })
+                        }
+                        className="w-6 h-5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-bold flex items-center justify-center text-xs"
+                        title="Nudge Left 10px"
+                      >
+                        ←
+                      </button>
+                      <button
+                        onClick={() =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            x: (selectedTextAnnotation.x ?? 120) + 10,
+                          })
+                        }
+                        className="w-6 h-5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-bold flex items-center justify-center text-xs"
+                        title="Nudge Right 10px"
+                      >
+                        →
+                      </button>
+                      <button
+                        onClick={() =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            y: Math.max(10, (selectedTextAnnotation.y ?? 120) - 10),
+                          })
+                        }
+                        className="w-6 h-5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-bold flex items-center justify-center text-xs"
+                        title="Nudge Up 10px"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
+                            y: (selectedTextAnnotation.y ?? 120) + 10,
+                          })
+                        }
+                        className="w-6 h-5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-bold flex items-center justify-center text-xs"
+                        title="Nudge Down 10px"
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Formatting: Font Size */}
                 <div>
-                  <label className="text-[10px] font-bold text-stone-600 block mb-1">Font Size (pt)</label>
+                  <label className="text-[10px] font-bold text-stone-600 block mb-1">Font Size (px)</label>
                   <div className="flex gap-1 flex-wrap">
-                    {[10, 12, 14, 16, 18, 20, 24].map((size) => (
+                    {[10, 12, 14, 16, 18, 20, 24, 32].map((size) => (
                       <button
                         key={size}
                         onClick={() =>
@@ -417,83 +504,23 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     </button>
                   </div>
 
-                  {/* Placement Toggle */}
+                  {/* Alignment Toggle */}
                   <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, { placement: 'above' })
-                      }
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                        selectedTextAnnotation.placement === 'above'
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-stone-700 border-stone-200'
-                      }`}
-                    >
-                      Above
-                    </button>
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, { placement: 'below' })
-                      }
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                        selectedTextAnnotation.placement === 'below'
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-stone-700 border-stone-200'
-                      }`}
-                    >
-                      Below
-                    </button>
-                  </div>
-                </div>
-
-                {/* Fine nudge coordinates */}
-                <div className="pt-1 flex items-center justify-between border-t border-blue-200/60 text-[10px] text-stone-600">
-                  <span>Position Nudge:</span>
-                  <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
-                          offsetX: (selectedTextAnnotation.offsetX || 0) - 5,
-                        })
-                      }
-                      className="px-1 py-0.5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-mono"
-                      title="Nudge Left"
-                    >
-                      ←
-                    </button>
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
-                          offsetX: (selectedTextAnnotation.offsetX || 0) + 5,
-                        })
-                      }
-                      className="px-1 py-0.5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-mono"
-                      title="Nudge Right"
-                    >
-                      →
-                    </button>
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
-                          offsetY: (selectedTextAnnotation.offsetY || 0) - 5,
-                        })
-                      }
-                      className="px-1 py-0.5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-mono"
-                      title="Nudge Up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      onClick={() =>
-                        onUpdateTextAnnotation?.(selectedTextAnnotation.id, {
-                          offsetY: (selectedTextAnnotation.offsetY || 0) + 5,
-                        })
-                      }
-                      className="px-1 py-0.5 bg-white border border-stone-200 rounded hover:bg-stone-50 font-mono"
-                      title="Nudge Down"
-                    >
-                      ↓
-                    </button>
+                    {(['left', 'center', 'right'] as const).map((align) => (
+                      <button
+                        key={align}
+                        onClick={() =>
+                          onUpdateTextAnnotation?.(selectedTextAnnotation.id, { textAlign: align })
+                        }
+                        className={`px-1.5 py-0.5 rounded text-[10px] capitalize font-medium border ${
+                          (selectedTextAnnotation.textAlign || 'left') === align
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-stone-700 border-stone-200'
+                        }`}
+                      >
+                        {align}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>

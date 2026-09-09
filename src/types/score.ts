@@ -237,19 +237,33 @@ export interface ScoreTextAnnotation {
   type?: 'text';
   text: string;
   content?: string; // Canonical alias for text
-  measureId: string;
-  measureNumber: number;
-  beatIndex?: number; // 0-based beat index within measure
-  subBeatIndex?: number; // 0-based subdivision index
-  placement?: 'above' | 'below' | 'free'; // default 'above'
-  offsetX?: number; // horizontal offset in px
-  offsetY?: number; // vertical offset in px
+  pageIndex?: number; // 0-based page index (defaults to 0)
+  x?: number; // Page-relative X coordinate in px (0 to pageWidth)
+  y?: number; // Page-relative Y coordinate in px (0 to pageHeight)
+  width?: number; // Bounding box width in px
+  height?: number; // Bounding box height in px
+  rotation?: number; // Optional rotation in degrees
   fontSize?: number; // e.g. 10, 12, 14, 16, 18, 20, 24, 32
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
   textDecoration?: 'none' | 'underline';
   textAlign?: 'left' | 'center' | 'right';
   color?: string;
+  fontFamily?: string;
+
+  // Optional anchor references (informative only; visual position is governed by pageIndex, x, y)
+  anchorMeasureId?: string | null;
+  anchorMeasureNumber?: number | null;
+  anchorBeat?: number | null;
+
+  // Legacy compatibility fields
+  measureId?: string;
+  measureNumber?: number;
+  beatIndex?: number;
+  subBeatIndex?: number;
+  placement?: 'above' | 'below' | 'free';
+  offsetX?: number;
+  offsetY?: number;
 }
 
 export interface Score {
@@ -260,8 +274,16 @@ export interface Score {
   measures: Measure[];
   learningLayer?: LearningLayerSettings;
   textAnnotations?: ScoreTextAnnotation[];
+  textObjects?: ScoreTextAnnotation[];
   voltas?: Volta[];
 }
+
+/**
+ * Canonical accessor for all text objects in a score
+ */
+export const getScoreTextObjects = (score: Score): ScoreTextAnnotation[] => {
+  return score.textObjects || score.textAnnotations || [];
+};
 
 export interface SavedProject {
   id: string;

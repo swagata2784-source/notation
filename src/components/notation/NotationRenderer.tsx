@@ -24,6 +24,7 @@ import {
 } from '../../utils/pianotasticNotation';
 import { audioEngine } from '../../services/audioEngine';
 import { Check, Trash2, X } from 'lucide-react';
+import { PageTextObjectsLayer } from './PageTextObjectsLayer';
 
 interface NotationRendererProps {
   score: Score;
@@ -53,13 +54,18 @@ interface NotationRendererProps {
   onToggleLineBreak?: (measureId: string) => void;
   onSelectTextAnnotation?: (textId: string) => void;
   onEditTextAnnotation?: (textAnnotation: ScoreTextAnnotation) => void;
-  onOpenAddTextModal?: (measureId: string, beatIndex: number, placement?: 'above' | 'below') => void;
+  onOpenAddTextModal?: (
+    targetOrMeasureId: any,
+    beatIndex?: number,
+    placement?: 'above' | 'below'
+  ) => void;
   onDeleteTextAnnotation?: (textId: string) => void;
-  onMoveTextAnnotation?: (textId: string, offsetX: number, offsetY: number) => void;
-  onCommitMoveTextAnnotation?: (textId: string, offsetX: number, offsetY: number) => void;
+  onMoveTextAnnotation?: (textId: string, x: number, y: number) => void;
+  onCommitMoveTextAnnotation?: (textId: string, x: number, y: number) => void;
   onUpdateTextAnnotation?: (textId: string, patch: Partial<ScoreTextAnnotation>) => void;
   visiblePageIndices?: number[];
   onPageCountCalculated?: (count: number) => void;
+  isPrintView?: boolean;
 }
 
 export const NotationRenderer: React.FC<NotationRendererProps> = ({
@@ -85,6 +91,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
   onUpdateTextAnnotation,
   visiblePageIndices,
   onPageCountCalculated,
+  isPrintView = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const isPlaying = Boolean(playbackPosition) || audioEngine.getIsPlaying();
@@ -358,6 +365,54 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
     onPageCountCalculated?.(pages.length);
   }, [pages.length, onPageCountCalculated]);
 
+  // Compute canonical page-level text objects, resolving legacy measure-bound annotations to page coordinates
+  const canonicalTextObjects = useMemo(() => {
+    const rawList = score.textObjects || score.textAnnotations || [];
+    return rawList.map((t) => {
+      if (t.x !== undefined && t.y !== undefined && t.pageIndex !== undefined) {
+        return t;
+      }
+      let resolvedPage = t.pageIndex ?? 0;
+      let resolvedX = t.x ?? 120;
+      let resolvedY = t.y ?? 120;
+
+      if (t.x === undefined || t.y === undefined) {
+        for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+          const p = pages[pIdx];
+          let sysY = p.startY;
+          for (let sIdx = 0; sIdx < p.systems.length; sIdx++) {
+            const sys = p.systems[sIdx];
+            let accW = 0;
+            for (let mIdx = 0; mIdx < sys.measures.length; mIdx++) {
+              const item = sys.measures[mIdx];
+              if (item.measure.id === t.measureId || item.measure.measureNumber === t.measureNumber) {
+                resolvedPage = pIdx;
+                const mX = staffMarginLeft + accW;
+                const bIdx = t.beatIndex !== undefined ? t.beatIndex : 0;
+                resolvedX = Math.round(mX + bIdx * 50 + (t.offsetX || 0));
+                resolvedY = Math.round(
+                  t.placement === 'below'
+                    ? sysY + measureBlockHeight + 18 + (t.offsetY || 0)
+                    : sysY - 8 + (t.offsetY || 0)
+                );
+                break;
+              }
+              accW += item.width;
+            }
+            sysY += measureBlockHeight + systemGap;
+          }
+        }
+      }
+
+      return {
+        ...t,
+        pageIndex: resolvedPage,
+        x: resolvedX,
+        y: resolvedY,
+      };
+    });
+  }, [score.textObjects, score.textAnnotations, pages, staffMarginLeft, measureBlockHeight, systemGap]);
+
   const quickChordPresets = ['C', 'Am', 'F', 'G7', 'Dm', 'Cmaj7', 'Em', 'A7', 'G', 'D'];
 
   return (
@@ -409,7 +464,39 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                 width={pageWidth}
                 height={pageHeight}
                 viewBox={`0 0 ${pageWidth} ${pageHeight}`}
-                className="w-full h-full block"
+                className={`w-full h-full block ${toolMode === 'text' ? 'cursor-crosshair' : ''}`}
+                onClick={(e) => {
+                  if (toolMode === 'text') {
+                    const svgEl = e.currentTarget;
+                    let clickX = 120;
+                    let clickY = 120;
+                    if (svgEl) {
+                      const pt = svgEl.createSVGPoint();
+                      pt.x = e.clientX;
+                      pt.y = e.clientY;
+                      const ctm = svgEl.getScreenCTM();
+                      if (ctm) {
+                        const trans = pt.matrixTransform(ctm.inverse());
+                        clickX = Math.round(trans.x);
+                        clickY = Math.round(trans.y);
+                      } else {
+                        const rect = svgEl.getBoundingClientRect();
+                        clickX = Math.round(((e.clientX - rect.left) / rect.width) * pageWidth);
+                        clickY = Math.round(((e.clientY - rect.top) / rect.height) * pageHeight);
+                      }
+                    }
+                    clickX = Math.max(15, Math.min(pageWidth - 25, clickX));
+                    clickY = Math.max(15, Math.min(pageHeight - 15, clickY));
+
+                    if (onOpenAddTextModal) {
+                      (onOpenAddTextModal as any)({
+                        pageIndex,
+                        x: clickX,
+                        y: clickY,
+                      });
+                    }
+                  }
+                }}
               >
                 {/* Score Running Header on subsequent pages */}
                 {pageIndex > 0 && (
@@ -1432,207 +1519,6 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                               />
                             </g>
                           )}
-
-                          {/* Free-form Score Text Annotations for this measure */}
-                          {(score.textAnnotations || [])
-                            .filter(
-                              (t) => t.measureId === measure.id || (!t.measureId && t.measureNumber === measure.measureNumber)
-                            )
-                            .map((textObj) => {
-                              const isSelected =
-                                selection.textAnnotationId === textObj.id ||
-                                (selection.selectionType === 'text' && selection.eventId === textObj.id);
-                              const anchorBeat = textObj.beatIndex !== undefined ? textObj.beatIndex : 0;
-                              const anchorX = measureX + anchorBeat * colWidth + (textObj.offsetX || 0);
-
-                              let baseY = systemY - 8 + (textObj.offsetY || 0);
-                              if (textObj.placement === 'below') {
-                                baseY = systemY + measureBlockHeight + 18 + (textObj.offsetY || 0);
-                              } else if (textObj.placement === 'free') {
-                                baseY = systemY + 30 + (textObj.offsetY || 0);
-                              }
-
-                              const fontSize = textObj.fontSize || 14;
-                              const isBold = textObj.fontWeight === 'bold';
-                              const isItalic = textObj.fontStyle === 'italic';
-                              const isUnderline = textObj.textDecoration === 'underline';
-                              const textAnchor =
-                                textObj.textAlign === 'center'
-                                  ? 'middle'
-                                  : textObj.textAlign === 'right'
-                                  ? 'end'
-                                  : 'start';
-                              const textColor = textObj.color || '#0f172a';
-
-                              const approxWidth = Math.max(28, textObj.text.length * fontSize * 0.62 + 10);
-                              const approxHeight = fontSize + 6;
-                              const boxX =
-                                textAnchor === 'middle'
-                                  ? anchorX - approxWidth / 2
-                                  : textAnchor === 'end'
-                                  ? anchorX - approxWidth + 4
-                                  : anchorX - 4;
-                              const boxY = baseY - fontSize;
-
-                              return (
-                                <g
-                                  key={textObj.id}
-                                  id={`score-text-${textObj.id}`}
-                                  className="score-text-annotation cursor-pointer select-none group"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (toolMode === 'eraser') {
-                                      onDeleteTextAnnotation?.(textObj.id);
-                                    } else {
-                                      onSelectTextAnnotation?.(textObj.id);
-                                    }
-                                  }}
-                                  onDoubleClick={(e) => {
-                                    e.stopPropagation();
-                                    onEditTextAnnotation?.(textObj);
-                                  }}
-                                  onMouseDown={(e) => {
-                                    if (toolMode === 'eraser') return;
-                                    e.stopPropagation();
-                                    onSelectTextAnnotation?.(textObj.id);
-
-                                    const startX = e.clientX;
-                                    const startY = e.clientY;
-                                    const initOffsetX = textObj.offsetX || 0;
-                                    const initOffsetY = textObj.offsetY || 0;
-                                    let dragged = false;
-                                    let lastDx = 0;
-                                    let lastDy = 0;
-
-                                    const onMouseMove = (moveEvt: MouseEvent) => {
-                                      const dx = (moveEvt.clientX - startX) / zoom;
-                                      const dy = (moveEvt.clientY - startY) / zoom;
-                                      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-                                        dragged = true;
-                                      }
-                                      if (dragged) {
-                                        lastDx = dx;
-                                        lastDy = dy;
-                                        if (onMoveTextAnnotation) {
-                                          onMoveTextAnnotation(
-                                            textObj.id,
-                                            Math.round(initOffsetX + dx),
-                                            Math.round(initOffsetY + dy)
-                                          );
-                                        }
-                                      }
-                                    };
-
-                                    const onMouseUp = () => {
-                                      window.removeEventListener('mousemove', onMouseMove);
-                                      window.removeEventListener('mouseup', onMouseUp);
-                                      if (dragged && onCommitMoveTextAnnotation) {
-                                        onCommitMoveTextAnnotation(
-                                          textObj.id,
-                                          Math.round(initOffsetX + lastDx),
-                                          Math.round(initOffsetY + lastDy)
-                                        );
-                                      }
-                                    };
-
-                                    window.addEventListener('mousemove', onMouseMove);
-                                    window.addEventListener('mouseup', onMouseUp);
-                                  }}
-                                >
-                                  {/* Selection Bounding Box */}
-                                  {isSelected && (
-                                    <g className="print:hidden">
-                                      <rect
-                                        x={boxX}
-                                        y={boxY}
-                                        width={approxWidth}
-                                        height={approxHeight}
-                                        fill="#eff6ff"
-                                        fillOpacity="0.6"
-                                        stroke="#2563eb"
-                                        strokeWidth="1.5"
-                                        strokeDasharray="3 2"
-                                        rx={3}
-                                      />
-                                      {/* Corner handles */}
-                                      <rect x={boxX - 2} y={boxY - 2} width={4} height={4} fill="#2563eb" />
-                                      <rect x={boxX + approxWidth - 2} y={boxY - 2} width={4} height={4} fill="#2563eb" />
-                                      <rect x={boxX - 2} y={boxY + approxHeight - 2} width={4} height={4} fill="#2563eb" />
-                                      {/* Interactive Resize Handle on Bottom-Right */}
-                                      <rect
-                                        x={boxX + approxWidth - 3}
-                                        y={boxY + approxHeight - 3}
-                                        width={7}
-                                        height={7}
-                                        fill="#2563eb"
-                                        className="cursor-se-resize"
-                                        onMouseDown={(e) => {
-                                          e.stopPropagation();
-                                          const startY = e.clientY;
-                                          const startFontSize = fontSize;
-                                          let resized = false;
-                                          let finalSize = startFontSize;
-
-                                          const onResizeMove = (moveEvt: MouseEvent) => {
-                                            const dy = (moveEvt.clientY - startY) / zoom;
-                                            const newSize = Math.max(8, Math.min(64, Math.round(startFontSize + dy * 0.5)));
-                                            if (newSize !== finalSize) {
-                                              resized = true;
-                                              finalSize = newSize;
-                                              onUpdateTextAnnotation?.(textObj.id, { fontSize: newSize });
-                                            }
-                                          };
-
-                                          const onResizeUp = () => {
-                                            window.removeEventListener('mousemove', onResizeMove);
-                                            window.removeEventListener('mouseup', onResizeUp);
-                                            if (resized && onCommitMoveTextAnnotation) {
-                                              onCommitMoveTextAnnotation(
-                                                textObj.id,
-                                                textObj.offsetX || 0,
-                                                textObj.offsetY || 0
-                                              );
-                                            }
-                                          };
-
-                                          window.addEventListener('mousemove', onResizeMove);
-                                          window.addEventListener('mouseup', onResizeUp);
-                                        }}
-                                      />
-                                    </g>
-                                  )}
-
-                                  {/* Hover Bounding Box */}
-                                  {!isSelected && (
-                                    <rect
-                                      x={boxX}
-                                      y={boxY}
-                                      width={approxWidth}
-                                      height={approxHeight}
-                                      fill="transparent"
-                                      className="group-hover:stroke-blue-400 group-hover:stroke-dashed group-hover:stroke-[1px] print:hidden"
-                                      rx={3}
-                                    />
-                                  )}
-
-                                  {/* Rendered Text */}
-                                  <text
-                                    x={anchorX}
-                                    y={baseY}
-                                    fontFamily="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif"
-                                    fontSize={fontSize}
-                                    fontWeight={isBold ? 'bold' : 'normal'}
-                                    fontStyle={isItalic ? 'italic' : 'normal'}
-                                    textDecoration={isUnderline ? 'underline' : 'none'}
-                                    textAnchor={textAnchor}
-                                    fill={textColor}
-                                    className="pointer-events-none"
-                                  >
-                                    {textObj.text}
-                                  </text>
-                                </g>
-                              );
-                            })}
                         </g>
                       );
                     })}
@@ -1683,6 +1569,27 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                   Page {pageIndex + 1} of {pages.length}
                 </text>
               </g>
+
+              {/* Independent Page-Level Text Objects Layer */}
+              <PageTextObjectsLayer
+                pageIndex={pageIndex}
+                pageWidth={pageWidth}
+                pageHeight={pageHeight}
+                zoom={zoom}
+                isPrintView={isPrintView}
+                textObjects={canonicalTextObjects}
+                selectedTextAnnotationId={
+                  selection.textAnnotationId ||
+                  (selection.selectionType === 'text' ? selection.eventId : null)
+                }
+                toolMode={toolMode}
+                onSelectTextAnnotation={onSelectTextAnnotation}
+                onEditTextAnnotation={onEditTextAnnotation}
+                onMoveTextAnnotation={onMoveTextAnnotation}
+                onCommitMoveTextAnnotation={onCommitMoveTextAnnotation}
+                onUpdateTextAnnotation={onUpdateTextAnnotation}
+                onDeleteTextAnnotation={onDeleteTextAnnotation}
+              />
             </svg>
           </div>
         </div>
