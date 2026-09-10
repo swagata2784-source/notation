@@ -16,6 +16,8 @@ import {
   SavedProject,
   ScoreTextAnnotation,
   Volta,
+  SpacingObject,
+  NotationClipboardData,
 } from './types/score';
 import { SAMPLE_SCORES } from './data/sampleScores';
 import { audioEngine } from './services/audioEngine';
@@ -23,6 +25,10 @@ import { midiService } from './services/midiService';
 import { getStaffStepOffset, pitchFromDiatonicStepValue, getDiatonicStepValue } from './utils/musicTheory';
 import { ProjectStorageService, NewScoreConfig } from './services/projectStorageService';
 import { ExportService } from './services/exportService';
+import { cloudProjectService } from './services/cloudProjectService';
+import { auth } from './lib/firebase';
+import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
+import { CloudSyncState } from './components/layout/CloudSyncStatusIndicator';
 import {
   getMeasureTotalBeats,
   isBeatLockedByPickup,
@@ -59,6 +65,7 @@ import { ProjectLibraryModal } from './components/modals/ProjectLibraryModal';
 import { TextAnnotationModal } from './components/modals/TextAnnotationModal';
 import { UnsavedChangesModal } from './components/modals/UnsavedChangesModal';
 import { SaveProjectModal } from './components/modals/SaveProjectModal';
+import { AuthModal } from './components/auth/AuthModal';
 
 export default function App() {
   // Navigation & Startup view state: persist across refreshes
@@ -157,21 +164,168 @@ export default function App() {
   } | null>(null);
   const [appToast, setAppToast] = useState<string | null>(null);
 
+  // Clipboard state
+  const [clipboardData, setClipboardData] = useState<NotationClipboardData | null>(() => {
+    try {
+      const saved = localStorage.getItem('pianotastic_clipboard');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Firebase Auth & Cloud Sync state
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+
+  // Cloud Sync / Save Status Indicator State
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncState>('saved');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(new Date());
+  const [cloudErrorMessage, setCloudErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!auth) return;
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        try {
+          setIsSyncingCloud(true);
+          const cloudProjects = await cloudProjectService.getUserProjects(user.uid);
+          if (cloudProjects.length > 0) {
+            setSavedProjects((local) => {
+              const map = new Map<string, SavedProject>();
+              local.forEach((p) => map.set(p.id, p));
+              cloudProjects.forEach((p) => map.set(p.id, p));
+              const merged = Array.from(map.values());
+              ProjectStorageService.saveProjects(merged);
+              return merged;
+            });
+          }
+        } catch (err) {
+          console.warn('Cloud sync error on auth state change:', err);
+        } finally {
+          setIsSyncingCloud(false);
+        }
+      } else {
+        // Seamlessly authenticate anonymously so cloud saves work immediately
+        try {
+          await signInAnonymously(auth);
+        } catch {
+          // If anonymous sign-in is disabled, continue with local sync
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const showToast = useCallback((msg: string) => {
     setAppToast(msg);
     setTimeout(() => setAppToast(null), 3500);
   }, []);
 
-  // Push score to undo stack
-  const pushScoreState = useCallback((newScore: Score) => {
-    setHistory((prev) => {
-      const upToCurrent = prev.slice(0, historyIndex + 1);
-      return [...upToCurrent, newScore];
-    });
-    setHistoryIndex((prev) => prev + 1);
-    setScore(newScore);
-    setIsDirty(true);
-  }, [historyIndex]);
+  // Central Cloud Save Execution
+  const performCloudSave = useCallback(
+    async (scoreToSave: Score, isManual = false) => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setCloudSyncStatus('offline');
+        ProjectStorageService.saveProject(scoreToSave);
+        return;
+      }
+
+      setCloudSyncStatus('saving');
+      setCloudErrorMessage(null);
+
+      try {
+        // 1. Local backup
+        const updated = ProjectStorageService.saveProject(scoreToSave);
+        setSavedProjects(updated);
+
+        // 2. Cloud Firestore save
+        const user = auth.currentUser;
+        if (user) {
+          await cloudProjectService.saveProject(user.uid, scoreToSave);
+        }
+
+        setCloudSyncStatus('saved');
+        setLastSavedAt(new Date());
+        setCloudErrorMessage(null);
+        setIsDirty(false);
+
+        if (isManual) {
+          showToast(`Saved "${scoreToSave.metadata.title}" successfully!`);
+        }
+      } catch (err: any) {
+        console.warn('Cloud save error:', err);
+        setCloudSyncStatus('error');
+        setCloudErrorMessage(err?.message || 'Sync failed. Your latest edits are stored locally.');
+      }
+    },
+    [showToast]
+  );
+
+  // Push score to undo stack & mark unsaved
+  const pushScoreState = useCallback(
+    (newScore: Score) => {
+      setHistory((prev) => {
+        const upToCurrent = prev.slice(0, historyIndex + 1);
+        return [...upToCurrent, newScore];
+      });
+      setHistoryIndex((prev) => prev + 1);
+      setScore(newScore);
+      setIsDirty(true);
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setCloudSyncStatus('offline');
+      } else {
+        setCloudSyncStatus('saving');
+      }
+    },
+    [historyIndex]
+  );
+
+  // Debounced Autosave (1.8s)
+  const autosaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!isDirty) return;
+
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+    }
+
+    autosaveTimerRef.current = setTimeout(() => {
+      performCloudSave(latestScoreRef.current);
+    }, 1800);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+    };
+  }, [isDirty, score, performCloudSave]);
+
+  // Online / Offline Connectivity Listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      if (isDirty) {
+        performCloudSave(latestScoreRef.current);
+      } else {
+        setCloudSyncStatus('saved');
+      }
+    };
+    const handleOffline = () => {
+      setCloudSyncStatus('offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [isDirty, performCloudSave]);
 
   // Synchronous references for reliable external MIDI real-time processing
   const latestScoreRef = useRef(score);
@@ -257,6 +411,7 @@ export default function App() {
   }, []);
 
   const handleSelectProject = useCallback((projectOrScore: SavedProject | Score) => {
+    setCloudSyncStatus('loading');
     const scoreToLoad: Score =
       'metadata' in projectOrScore && 'measures' in projectOrScore
         ? (projectOrScore as Score)
@@ -266,6 +421,10 @@ export default function App() {
     setHistory([scoreToLoad]);
     setHistoryIndex(0);
     setIsDirty(false);
+    setCloudSyncStatus('saved');
+    setLastSavedAt(new Date());
+    setCloudErrorMessage(null);
+
     const initialBeatIndex = Math.max(0, (scoreToLoad.metadata?.pickupBeat || 1) - 1);
     setSelection({
       measureId: scoreToLoad.measures[0]?.id || 'm1',
@@ -294,18 +453,28 @@ export default function App() {
   const handleDeleteProject = useCallback((projectId: string) => {
     const updated = ProjectStorageService.deleteProject(projectId);
     setSavedProjects(updated);
-  }, []);
+    if (currentUser) {
+      cloudProjectService.deleteProject(currentUser.uid, projectId).catch((err) => {
+        console.warn('Cloud delete error:', err);
+      });
+    }
+  }, [currentUser]);
 
   const handleNavigateHome = useCallback(() => {
     // Auto-save current project state internally
     const updated = ProjectStorageService.saveProject(score);
     setSavedProjects(updated);
+    if (currentUser) {
+      cloudProjectService.saveProject(currentUser.uid, score).catch((err) => {
+        console.warn('Cloud auto-save error:', err);
+      });
+    }
     setIsDirty(false);
     // Stop audio playback if active
     audioEngine.stopPlayback();
     setPlaybackPosition(null);
     setViewMode('home');
-  }, [score]);
+  }, [score, currentUser]);
 
   // Internal Save Project (No download, returns to Home, asks for name if new)
   const handleSaveProject = useCallback(() => {
@@ -320,18 +489,15 @@ export default function App() {
     }
 
     try {
-      const updated = ProjectStorageService.saveProject(score);
-      setSavedProjects(updated);
       localStorage.setItem('pianotastic_last_active_project_id', score.id);
-      setIsDirty(false);
-      showToast(`Saved "${score.metadata.title}" successfully!`);
+      performCloudSave(score, true);
       audioEngine.stopPlayback();
       setPlaybackPosition(null);
       setViewMode('home');
     } catch (err) {
       console.error('Error saving project internally:', err);
     }
-  }, [score, savedProjects, showToast]);
+  }, [score, savedProjects, performCloudSave]);
 
   const handleSaveNewProject = useCallback(
     (projectTitle: string) => {
@@ -345,11 +511,8 @@ export default function App() {
           },
         };
         setScore(finalScore);
-        const updated = ProjectStorageService.saveProject(finalScore);
-        setSavedProjects(updated);
         localStorage.setItem('pianotastic_last_active_project_id', finalScore.id);
-        setIsDirty(false);
-        showToast(`Saved "${projectTitle}" successfully!`);
+        performCloudSave(finalScore, true);
         audioEngine.stopPlayback();
         setPlaybackPosition(null);
         setViewMode('home');
@@ -357,7 +520,7 @@ export default function App() {
         console.error('Error saving new project:', err);
       }
     },
-    [score, showToast]
+    [score, performCloudSave]
   );
 
   // Prompt-guarded New / Open / Home actions for Unsaved Changes
@@ -582,6 +745,288 @@ export default function App() {
     },
     [showToast]
   );
+
+  // Space Tool Handlers
+  const handleUpdateSpace = useCallback(
+    (spaceId: string, patch: Partial<SpacingObject>) => {
+      setScore((prev) => {
+        const existing = prev.spacingObjects || [];
+        const updated = existing.map((s) => (s.id === spaceId ? { ...s, ...patch } : s));
+        const updatedScore: Score = {
+          ...prev,
+          spacingObjects: updated,
+        };
+        pushScoreState(updatedScore);
+        return updatedScore;
+      });
+    },
+    [pushScoreState]
+  );
+
+  const handleDeleteSpace = useCallback(
+    (spaceId: string) => {
+      setScore((prev) => {
+        const existing = prev.spacingObjects || [];
+        const updated = existing.filter((s) => s.id !== spaceId);
+        const updatedScore: Score = {
+          ...prev,
+          spacingObjects: updated,
+        };
+        pushScoreState(updatedScore);
+        return updatedScore;
+      });
+      setSelection((prev) =>
+        prev.spacingObjectId === spaceId
+          ? { ...prev, selectionType: 'measure', spacingObjectId: undefined }
+          : prev
+      );
+      showToast('Vertical spacing removed');
+    },
+    [pushScoreState, showToast]
+  );
+
+  const handleAddSpace = useCallback(
+    (afterMeasureId: string, amount: number = 30, systemIndex: number = 0) => {
+      setScore((prev) => {
+        const existing = prev.spacingObjects || [];
+        const found = existing.find((s) => s.afterMeasureId === afterMeasureId);
+        let updated: SpacingObject[];
+        let targetId: string;
+        if (found) {
+          targetId = found.id;
+          updated = existing.map((s) =>
+            s.id === found.id ? { ...s, amount: Math.min(300, (s.amount || 0) + amount) } : s
+          );
+        } else {
+          targetId = `space_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const newSpace: SpacingObject = {
+            id: targetId,
+            afterMeasureId,
+            systemIndex,
+            amount: Math.min(300, Math.max(10, amount)),
+          };
+          updated = [...existing, newSpace];
+        }
+        const updatedScore: Score = {
+          ...prev,
+          spacingObjects: updated,
+        };
+        pushScoreState(updatedScore);
+        setSelection({
+          selectionType: 'space',
+          spacingObjectId: targetId,
+          measureId: afterMeasureId,
+          staff: 'RH',
+          eventId: null,
+        });
+        return updatedScore;
+      });
+      showToast(`Vertical space adjusted (+${amount}px)`);
+    },
+    [pushScoreState, showToast]
+  );
+
+  // Clipboard Handlers: Copy, Cut, Paste
+  const handleCopy = useCallback(() => {
+    const selMeasureId = selection.measureId || score.measures[0]?.id;
+    const measure = score.measures.find((m) => m.id === selMeasureId);
+    if (!measure) return;
+
+    const bIdx = selection.beatIndex !== undefined ? selection.beatIndex : 0;
+    const subIdx = selection.subBeatIndex !== undefined ? selection.subBeatIndex : 0;
+
+    const beatNotes = measure.beatNotes?.[bIdx] || [];
+    const beatChord =
+      measure.beatChords?.[bIdx] ||
+      measure.chordSymbols?.find((c) => Math.floor(c.beatOffset) === bIdx)?.formatted;
+    const beatLyric = measure.beatLyrics?.[`${bIdx}_${subIdx}`] || measure.beatLyrics?.[bIdx];
+    const beatSymbols = measure.beatSymbols?.[bIdx] || [];
+    const beatValue = measure.beatValues?.[bIdx] || 1;
+
+    const clip: NotationClipboardData = {
+      type: 'beat',
+      beatIndex: bIdx,
+      subBeatIndex: subIdx,
+      beatValue,
+      notes: JSON.parse(JSON.stringify(beatNotes)),
+      chord: beatChord,
+      lyric: beatLyric,
+      symbols: [...beatSymbols],
+      timestamp: Date.now(),
+    };
+
+    setClipboardData(clip);
+    try {
+      localStorage.setItem('pianotastic_clipboard', JSON.stringify(clip));
+    } catch {}
+    showToast(`Copied Beat ${bIdx + 1} from Bar ${measure.measureNumber}`);
+  }, [selection, score, showToast]);
+
+  const handleCut = useCallback(() => {
+    const selMeasureId = selection.measureId || score.measures[0]?.id;
+    const measure = score.measures.find((m) => m.id === selMeasureId);
+    if (!measure) return;
+
+    const bIdx = selection.beatIndex !== undefined ? selection.beatIndex : 0;
+    const subIdx = selection.subBeatIndex !== undefined ? selection.subBeatIndex : 0;
+
+    // First copy to clipboard
+    handleCopy();
+
+    // Then clear from measure
+    const nextBeatNotes = { ...(measure.beatNotes || {}) };
+    delete nextBeatNotes[bIdx];
+
+    const nextBeatChords = { ...(measure.beatChords || {}) };
+    delete nextBeatChords[bIdx];
+
+    const nextBeatLyrics = { ...(measure.beatLyrics || {}) };
+    delete nextBeatLyrics[`${bIdx}_${subIdx}`];
+    delete nextBeatLyrics[bIdx];
+
+    const nextBeatSymbols = { ...(measure.beatSymbols || {}) };
+    delete nextBeatSymbols[bIdx];
+
+    const updatedMeasure: Measure = {
+      ...measure,
+      beatNotes: nextBeatNotes,
+      beatChords: nextBeatChords,
+      beatLyrics: nextBeatLyrics,
+      beatSymbols: nextBeatSymbols,
+    };
+    const syncedMeasure = syncMeasureEventsFromBeatData(
+      updatedMeasure,
+      score.metadata.initialTimeSignature,
+      score.metadata.handTemplate || 'Both'
+    );
+
+    const updatedMeasures = score.measures.map((m) => (m.id === measure.id ? syncedMeasure : m));
+    pushScoreState({
+      ...score,
+      measures: updatedMeasures,
+    });
+    showToast(`Cut Beat ${bIdx + 1} from Bar ${measure.measureNumber}`);
+  }, [selection, score, handleCopy, pushScoreState, showToast]);
+
+  const handlePaste = useCallback(() => {
+    if (!clipboardData) {
+      showToast('Clipboard is empty');
+      return;
+    }
+    const selMeasureId = selection.measureId || score.measures[0]?.id;
+    const measure = score.measures.find((m) => m.id === selMeasureId);
+    if (!measure) return;
+
+    const bIdx = selection.beatIndex !== undefined ? selection.beatIndex : 0;
+    const subIdx = selection.subBeatIndex !== undefined ? selection.subBeatIndex : 0;
+
+    const nextBeatNotes = { ...(measure.beatNotes || {}) };
+    if (clipboardData.notes && clipboardData.notes.length > 0) {
+      nextBeatNotes[bIdx] = JSON.parse(JSON.stringify(clipboardData.notes));
+    }
+
+    const nextBeatChords = { ...(measure.beatChords || {}) };
+    if (clipboardData.chord) {
+      nextBeatChords[bIdx] = clipboardData.chord;
+    }
+
+    const nextBeatLyrics = { ...(measure.beatLyrics || {}) };
+    if (clipboardData.lyric) {
+      nextBeatLyrics[`${bIdx}_${subIdx}`] = clipboardData.lyric;
+    }
+
+    const nextBeatSymbols = { ...(measure.beatSymbols || {}) };
+    if (clipboardData.symbols && clipboardData.symbols.length > 0) {
+      nextBeatSymbols[bIdx] = [...clipboardData.symbols];
+    }
+
+    const nextBeatValues = { ...(measure.beatValues || {}) };
+    if (clipboardData.beatValue) {
+      nextBeatValues[bIdx] = clipboardData.beatValue;
+    }
+
+    const updatedMeasure: Measure = {
+      ...measure,
+      beatNotes: nextBeatNotes,
+      beatChords: nextBeatChords,
+      beatLyrics: nextBeatLyrics,
+      beatSymbols: nextBeatSymbols,
+      beatValues: nextBeatValues,
+    };
+    const syncedMeasure = syncMeasureEventsFromBeatData(
+      updatedMeasure,
+      score.metadata.initialTimeSignature,
+      score.metadata.handTemplate || 'Both'
+    );
+
+    const updatedMeasures = score.measures.map((m) => (m.id === measure.id ? syncedMeasure : m));
+    pushScoreState({
+      ...score,
+      measures: updatedMeasures,
+    });
+    showToast(`Pasted into Bar ${measure.measureNumber}, Beat ${bIdx + 1}`);
+  }, [clipboardData, selection, score, pushScoreState, showToast]);
+
+  // Handle Copy Whole Measure
+  const handleCopyMeasure = useCallback((measureId: string) => {
+    const measure = score.measures.find((m) => m.id === measureId);
+    if (!measure) return;
+
+    const clip: NotationClipboardData = {
+      type: 'measure',
+      measure: JSON.parse(JSON.stringify(measure)),
+      timestamp: Date.now(),
+    };
+    setClipboardData(clip);
+    try {
+      localStorage.setItem('pianotastic_clipboard', JSON.stringify(clip));
+    } catch {}
+    showToast(`Copied Bar ${measure.measureNumber}`);
+  }, [score, showToast]);
+
+  // Handle Paste into Whole Measure
+  const handlePasteIntoMeasure = useCallback((measureId: string) => {
+    if (!clipboardData) {
+      showToast('Clipboard is empty');
+      return;
+    }
+    const measure = score.measures.find((m) => m.id === measureId);
+    if (!measure) return;
+
+    let updatedMeasure: Measure;
+    if (clipboardData.type === 'measure' && clipboardData.measure) {
+      updatedMeasure = {
+        ...JSON.parse(JSON.stringify(clipboardData.measure)),
+        id: measure.id,
+        measureNumber: measure.measureNumber,
+      };
+    } else {
+      const bIdx = 0;
+      const nextBeatNotes = { ...(measure.beatNotes || {}) };
+      if (clipboardData.notes) nextBeatNotes[bIdx] = JSON.parse(JSON.stringify(clipboardData.notes));
+      const nextBeatChords = { ...(measure.beatChords || {}) };
+      if (clipboardData.chord) nextBeatChords[bIdx] = clipboardData.chord;
+      const nextBeatLyrics = { ...(measure.beatLyrics || {}) };
+      if (clipboardData.lyric) nextBeatLyrics[`0_0`] = clipboardData.lyric;
+      updatedMeasure = {
+        ...measure,
+        beatNotes: nextBeatNotes,
+        beatChords: nextBeatChords,
+        beatLyrics: nextBeatLyrics,
+      };
+    }
+    const syncedMeasure = syncMeasureEventsFromBeatData(
+      updatedMeasure,
+      score.metadata.initialTimeSignature,
+      score.metadata.handTemplate || 'Both'
+    );
+    const updatedMeasures = score.measures.map((m) => (m.id === measure.id ? syncedMeasure : m));
+    pushScoreState({
+      ...score,
+      measures: updatedMeasures,
+    });
+    showToast(`Pasted into Bar ${measure.measureNumber}`);
+  }, [clipboardData, score, pushScoreState, showToast]);
 
   // Update Score Metadata
   const handleUpdateMetadata = useCallback((patch: Partial<Score['metadata']>) => {
@@ -1941,6 +2386,28 @@ export default function App() {
         return;
       }
 
+      // Clipboard Shortcuts
+      // Cut (Ctrl+X / Cmd+X)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
+        e.preventDefault();
+        handleCut();
+        return;
+      }
+
+      // Copy (Ctrl+C / Cmd+C)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        handleCopy();
+        return;
+      }
+
+      // Paste (Ctrl+V / Cmd+V)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        handlePaste();
+        return;
+      }
+
       // File Menu Shortcuts
       // Save Project (Ctrl+S / Cmd+S)
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
@@ -2005,6 +2472,11 @@ export default function App() {
       // Tool switching
       if (e.key.toLowerCase() === 'v') {
         setToolMode('select');
+        return;
+      }
+      if (e.key.toLowerCase() === 's') {
+        setToolMode('space');
+        showToast('Space tool active (↕) — Drag or click between systems to adjust vertical space');
         return;
       }
       if (e.key.toLowerCase() === 'n') {
@@ -2250,6 +2722,30 @@ export default function App() {
           onOpenNewPage={handleOpenNewPageModal}
           onDeleteProject={handleDeleteProject}
           onImportFile={handleImportFile}
+          currentUser={currentUser}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onSyncCloud={async () => {
+            if (!currentUser) return;
+            try {
+              setIsSyncingCloud(true);
+              const cloudProjects = await cloudProjectService.getUserProjects(currentUser.uid);
+              setSavedProjects((local) => {
+                const map = new Map<string, SavedProject>();
+                local.forEach((p) => map.set(p.id, p));
+                cloudProjects.forEach((p) => map.set(p.id, p));
+                const merged = Array.from(map.values());
+                ProjectStorageService.saveProjects(merged);
+                return merged;
+              });
+              showToast('Library synchronized with cloud');
+            } catch (err) {
+              console.error('Cloud sync error:', err);
+              showToast('Cloud sync failed');
+            } finally {
+              setIsSyncingCloud(false);
+            }
+          }}
+          isSyncing={isSyncingCloud}
         />
 
         {/* Template Selection Pop-up Modal */}
@@ -2257,6 +2753,22 @@ export default function App() {
           isOpen={isNewScoreModalOpen}
           onClose={handleCloseNewPageModal}
           onCreateScore={handleCreateScore}
+        />
+
+        {/* Firebase Cloud Authentication Modal */}
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          currentUser={currentUser}
+          localProjects={savedProjects}
+          onMigrateLocalProjects={async (userId) => {
+            try {
+              const count = await cloudProjectService.migrateLocalProjects(userId, savedProjects);
+              showToast(`Synchronized ${count} project(s) to cloud`);
+            } catch (err) {
+              console.warn('Migration warning:', err);
+            }
+          }}
         />
       </div>
     );
@@ -2282,6 +2794,16 @@ export default function App() {
         canRedo={historyIndex < history.length - 1}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onCut={handleCut}
+        onCopy={handleCopy}
+        onPaste={handlePaste}
+        hasClipboardContent={Boolean(clipboardData)}
+        currentUser={currentUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        cloudSyncStatus={cloudSyncStatus}
+        lastSavedAt={lastSavedAt}
+        cloudErrorMessage={cloudErrorMessage}
+        onRetryCloudSync={() => performCloudSave(score, true)}
         onUpdateMetadata={handleUpdateMetadata}
         onUpdateLayout={handleUpdateLayout}
         onLoadScore={(newScore) => {
@@ -2357,6 +2879,10 @@ export default function App() {
             activePositionText={positionText}
             isInspectorOpen={isInspectorOpen}
             onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
+            onCut={handleCut}
+            onCopy={handleCopy}
+            onPaste={handlePaste}
+            hasClipboardContent={Boolean(clipboardData)}
           />
         );
       })()}
@@ -2417,6 +2943,9 @@ export default function App() {
               onCommitMoveTextAnnotation={handleCommitMoveTextAnnotation}
               onUpdateTextAnnotation={handleUpdateTextAnnotation}
               onDeleteTextAnnotation={handleDeleteTextAnnotation}
+              onUpdateSpace={handleUpdateSpace}
+              onDeleteSpace={handleDeleteSpace}
+              onAddSpace={handleAddSpace}
             />
           </ErrorBoundary>
         </div>
@@ -2468,6 +2997,9 @@ export default function App() {
           onEditTextAnnotation={handleEditTextAnnotation}
           onDeleteTextAnnotation={handleDeleteTextAnnotation}
           onUpdateTextAnnotation={handleUpdateTextAnnotation}
+          onUpdateSpace={handleUpdateSpace}
+          onDeleteSpace={handleDeleteSpace}
+          onAddSpace={handleAddSpace}
         />
       </div>
 
@@ -2580,6 +3112,10 @@ export default function App() {
           onResetWidth={(mId) => handleMeasureWidthChange(mId, undefined as any)}
           onOpenNavigation={(measure) => setNavigationModalMeasure(measure)}
           onToggleLineBreak={handleToggleLineBreak}
+          onAddSpaceBelow={(mId) => handleAddSpace(mId, 30)}
+          onCopyMeasure={handleCopyMeasure}
+          onPasteIntoMeasure={handlePasteIntoMeasure}
+          hasClipboardContent={Boolean(clipboardData)}
         />
       )}
 
@@ -2622,6 +3158,30 @@ export default function App() {
           setIsLibraryModalOpen(false);
           requestNewProject();
         }}
+        currentUser={currentUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onSyncCloud={async () => {
+          if (!currentUser) return;
+          try {
+            setIsSyncingCloud(true);
+            const cloudProjects = await cloudProjectService.getUserProjects(currentUser.uid);
+            setSavedProjects((local) => {
+              const map = new Map<string, SavedProject>();
+              local.forEach((p) => map.set(p.id, p));
+              cloudProjects.forEach((p) => map.set(p.id, p));
+              const merged = Array.from(map.values());
+              ProjectStorageService.saveProjects(merged);
+              return merged;
+            });
+            showToast('Library synchronized with cloud');
+          } catch (e) {
+            console.error('Cloud sync error:', e);
+            showToast('Cloud sync failed');
+          } finally {
+            setIsSyncingCloud(false);
+          }
+        }}
+        isSyncing={isSyncingCloud}
       />
 
       {/* Unsaved Changes Confirmation Modal */}

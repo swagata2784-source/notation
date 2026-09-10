@@ -27,8 +27,14 @@ import {
   Unlock,
   Columns,
   AlignJustify,
+  Scissors,
+  Copy,
+  ClipboardPaste,
+  Cloud,
+  User as UserIcon,
 } from 'lucide-react';
 import { ExportService } from '../../services/exportService';
+import { CloudSyncStatusIndicator, CloudSyncState } from './CloudSyncStatusIndicator';
 
 interface HeaderProps {
   score: Score;
@@ -36,6 +42,16 @@ interface HeaderProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onCut?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  hasClipboardContent?: boolean;
+  currentUser?: { email?: string | null; uid: string } | null;
+  onOpenAuthModal?: () => void;
+  cloudSyncStatus?: CloudSyncState;
+  lastSavedAt?: Date | null;
+  cloudErrorMessage?: string | null;
+  onRetryCloudSync?: () => void;
   onUpdateMetadata: (patch: Partial<Score['metadata']>) => void;
   onUpdateLayout: (patch: Partial<Score['layoutSettings']>) => void;
   onUpdateLearningLayer?: (patch: Partial<LearningLayerSettings>) => void;
@@ -63,6 +79,16 @@ export const Header: React.FC<HeaderProps> = ({
   canRedo,
   onUndo,
   onRedo,
+  onCut,
+  onCopy,
+  onPaste,
+  hasClipboardContent = false,
+  currentUser,
+  onOpenAuthModal,
+  cloudSyncStatus,
+  lastSavedAt,
+  cloudErrorMessage,
+  onRetryCloudSync,
   onUpdateMetadata,
   onUpdateLayout,
   onUpdateLearningLayer,
@@ -489,6 +515,47 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <span>Redo</span>
                   <span className="text-[10px] text-stone-600">Ctrl+Y</span>
+                </button>
+                <div className="my-1 border-t border-stone-100" />
+                <button
+                  onClick={() => {
+                    onCut?.();
+                    setActiveMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Scissors className="w-3.5 h-3.5 text-stone-500" />
+                    <span>Cut</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono">Ctrl+X</span>
+                </button>
+                <button
+                  onClick={() => {
+                    onCopy?.();
+                    setActiveMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Copy className="w-3.5 h-3.5 text-stone-500" />
+                    <span>Copy</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono">Ctrl+C</span>
+                </button>
+                <button
+                  onClick={() => {
+                    onPaste?.();
+                    setActiveMenu(null);
+                  }}
+                  disabled={!hasClipboardContent}
+                  className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800 disabled:opacity-35"
+                >
+                  <div className="flex items-center space-x-2">
+                    <ClipboardPaste className="w-3.5 h-3.5 text-stone-500" />
+                    <span>Paste</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono">Ctrl+V</span>
                 </button>
                 <div className="my-1 border-t border-stone-100" />
                 <button
@@ -1009,6 +1076,36 @@ export const Header: React.FC<HeaderProps> = ({
           <Printer className="w-3.5 h-3.5" />
           <span>Print / PDF</span>
         </button>
+
+        {/* Cloud Sync Status Indicator (Always visible in top-right) */}
+        {cloudSyncStatus && (
+          <CloudSyncStatusIndicator
+            status={cloudSyncStatus}
+            lastSavedAt={lastSavedAt ?? null}
+            errorMessage={cloudErrorMessage}
+            onRetry={onRetryCloudSync}
+            onOpenCloudSettings={onOpenAuthModal}
+          />
+        )}
+
+        {/* Cloud Sync & Account Button */}
+        {onOpenAuthModal && (
+          <button
+            id="header-cloud-sync-btn"
+            onClick={onOpenAuthModal}
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors shadow-2xs ${
+              currentUser
+                ? 'bg-amber-50 border-amber-300 text-amber-950 hover:bg-amber-100 font-semibold'
+                : 'bg-white border-stone-300 text-stone-700 hover:bg-stone-50'
+            }`}
+            title={currentUser ? `Connected as ${currentUser.email}. Click for Cloud Sync options` : 'Sign in to sync projects to cloud'}
+          >
+            <Cloud className={`w-3.5 h-3.5 ${currentUser ? 'text-amber-600' : 'text-stone-500'}`} />
+            <span className="truncate max-w-[95px]">
+              {currentUser ? (currentUser.email?.split('@')[0] || 'Cloud Sync') : 'Cloud Sync'}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Custom Measure Lock Modal */}

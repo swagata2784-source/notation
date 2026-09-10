@@ -15,12 +15,18 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
   const shortcuts = [
     { category: 'Tools & Modes', items: [
       { key: 'V', desc: 'Select tool' },
+      { key: 'S', desc: 'Space tool (vertical system spacing ↕)' },
       { key: 'N', desc: 'Note entry tool' },
       { key: 'R', desc: 'Rest entry tool' },
       { key: 'L', desc: 'Lyrics entry tool' },
       { key: 'T', desc: 'Score text tool' },
       { key: 'Shift + C', desc: 'Add chord symbol' },
       { key: 'Del / Backspace', desc: 'Clear subdivision (.) or beat (—)' },
+    ]},
+    { category: 'Clipboard & Editing', items: [
+      { key: 'Ctrl + X', desc: 'Cut selected notes / beat' },
+      { key: 'Ctrl + C', desc: 'Copy selected notes / beat' },
+      { key: 'Ctrl + V', desc: 'Paste copied notation at active beat' },
     ]},
     { category: 'Note Values & Subdivisions', items: [
       { key: '1 - 4 or F1 - F4', desc: 'Note Value: 1, 2, 3, or 4 notes per beat' },

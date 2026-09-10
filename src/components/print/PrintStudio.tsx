@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { NotationRenderer } from '../notation/NotationRenderer';
 import { jsPDF } from 'jspdf';
+import { svg2pdf } from 'svg2pdf.js';
 import html2canvas from 'html2canvas-pro';
 
 interface PrintStudioProps {
@@ -180,17 +181,30 @@ export const PrintStudio: React.FC<PrintStudioProps> = ({ score, onBackToEditor 
         }
 
         const pageEl = pageElements[i];
-        setPdfStatusMessage(`Processing page ${i + 1} of ${pageElements.length}...`);
+        setPdfStatusMessage(`Rendering vector page ${i + 1} of ${pageElements.length}...`);
 
-        const canvas = await html2canvas(pageEl, {
-          scale: 2.5, // 300 DPI equivalent
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          logging: false,
-        });
-
-        const imgData = canvas.toDataURL('image/png', 1.0);
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfPageWidth, pdfPageHeight, undefined, 'FAST');
+        const svgEl = pageEl.querySelector('svg');
+        if (svgEl) {
+          try {
+            const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+            await svg2pdf(clonedSvg, pdf, {
+              x: 0,
+              y: 0,
+              width: pdfPageWidth,
+              height: pdfPageHeight,
+            });
+          } catch (vectorErr) {
+            console.warn('Vector PDF fallback for page ' + (i + 1), vectorErr);
+            const canvas = await html2canvas(pageEl, {
+              scale: 3.5,
+              useCORS: true,
+              backgroundColor: '#ffffff',
+              logging: false,
+            });
+            const imgData = canvas.toDataURL('image/png', 1.0);
+            pdf.addImage(imgData, 'PNG', 0, 0, pdfPageWidth, pdfPageHeight, undefined, 'FAST');
+          }
+        }
       }
 
       const cleanTitle = (score.metadata.title || 'Score').replace(/[/\\?%*:|"<>]/g, '_');

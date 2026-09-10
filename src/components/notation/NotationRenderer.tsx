@@ -11,6 +11,7 @@ import {
   ChordSymbolEvent,
   ScoreTextAnnotation,
   Volta,
+  SpacingObject,
 } from '../../types/score';
 import {
   formatNoteLetter,
@@ -25,6 +26,7 @@ import {
 import { audioEngine } from '../../services/audioEngine';
 import { Check, Trash2, X } from 'lucide-react';
 import { PageTextObjectsLayer } from './PageTextObjectsLayer';
+import { PageSpacingLayer } from './PageSpacingLayer';
 
 interface NotationRendererProps {
   score: Score;
@@ -63,6 +65,10 @@ interface NotationRendererProps {
   onMoveTextAnnotation?: (textId: string, x: number, y: number) => void;
   onCommitMoveTextAnnotation?: (textId: string, x: number, y: number) => void;
   onUpdateTextAnnotation?: (textId: string, patch: Partial<ScoreTextAnnotation>) => void;
+  onSelectSpace?: (spaceId: string) => void;
+  onAddSpace?: (afterMeasureId: string, amount: number, systemIndex: number) => void;
+  onUpdateSpace?: (spaceId: string, patch: Partial<SpacingObject>) => void;
+  onDeleteSpace?: (spaceId: string) => void;
   visiblePageIndices?: number[];
   onPageCountCalculated?: (count: number) => void;
   isPrintView?: boolean;
@@ -89,6 +95,10 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
   onMoveTextAnnotation,
   onCommitMoveTextAnnotation,
   onUpdateTextAnnotation,
+  onSelectSpace,
+  onAddSpace,
+  onUpdateSpace,
+  onDeleteSpace,
   visiblePageIndices,
   onPageCountCalculated,
   isPrintView = false,
@@ -225,7 +235,10 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
 
   // Dynamic Reflow & Measures per system calculation (Honors manual line breaks and Measure Lock independently)
   const { systems, activeLineWidth } = useMemo(() => {
-    const sysList: { measures: { measure: Measure; width: number; measureIdx: number; naturalWidth: number }[] }[] = [];
+    const sysList: {
+      systemIndex: number;
+      measures: { measure: Measure; width: number; measureIdx: number; naturalWidth: number }[];
+    }[] = [];
     const measureLock = score.layoutSettings.measureLockPerLine;
     const isLocked = measureLock !== null && measureLock !== undefined && measureLock > 0;
     const lockCount = isLocked ? Math.max(1, Math.round(measureLock)) : null;
@@ -258,7 +271,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
       }
 
       if (currentSystem.length > 0 && shouldBreak) {
-        sysList.push({ measures: currentSystem });
+        sysList.push({ systemIndex: sysList.length, measures: currentSystem });
         currentSystem = [];
         currentNaturalSum = 0;
       }
@@ -273,7 +286,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
     });
 
     if (currentSystem.length > 0) {
-      sysList.push({ measures: currentSystem });
+      sysList.push({ systemIndex: sysList.length, measures: currentSystem });
     }
 
     // Justify systems strictly across contentWidth (fixed A4 printable width)
@@ -318,6 +331,16 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
   const footerReservedHeight = 44;
   const bottomPrintableMargin = pageHeight - pageMarginBottom - footerReservedHeight;
 
+  // Helper to retrieve extra vertical spacing defined by Space Tool
+  const getSystemExtraSpace = (sys: typeof systems[0], globalSysIdx: number) => {
+    const lastMeasure = sys.measures[sys.measures.length - 1]?.measure;
+    if (!score.spacingObjects || score.spacingObjects.length === 0) return 0;
+    const match = score.spacingObjects.filter(
+      (s) => (lastMeasure && s.afterMeasureId === lastMeasure.id) || s.systemIndex === globalSysIdx
+    );
+    return match.reduce((sum, s) => sum + (s.amount || 0), 0);
+  };
+
   // Group systems into exact A4 pages based on vertical height
   const pages = useMemo(() => {
     const pageList: { systems: typeof systems; startY: number }[] = [];
@@ -326,8 +349,9 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
     const subsequentPageStartY = 50;
     let currentY = firstPageStartY;
 
-    systems.forEach((sys) => {
-      const sysSpan = measureBlockHeight + systemGap;
+    systems.forEach((sys, sysIdx) => {
+      const extraSpace = getSystemExtraSpace(sys, sysIdx);
+      const sysSpan = measureBlockHeight + systemGap + extraSpace;
       const prevSystem = curPageSystems.length > 0 ? curPageSystems[curPageSystems.length - 1] : null;
       const prevHadPageBreak = prevSystem
         ? prevSystem.measures.some((m) => m.measure.pageBreak)
@@ -359,7 +383,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
     return pageList.length > 0
       ? pageList
       : [{ systems: [], startY: firstPageStartY }];
-  }, [systems, measureBlockHeight, systemGap, bottomPrintableMargin]);
+  }, [systems, measureBlockHeight, systemGap, bottomPrintableMargin, score.spacingObjects]);
 
   React.useEffect(() => {
     onPageCountCalculated?.(pages.length);
@@ -613,9 +637,33 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
               )}
 
               {/* Render Systems / Lines */}
-              {pageSystems.map((system, sysIdx) => {
-                const systemY = currentSystemY;
-                currentSystemY += measureBlockHeight + systemGap;
+              {(() => {
+                const systemPositions: Array<{
+                  globalSysIdx: number;
+                  systemY: number;
+                  measureBlockHeight: number;
+                  extraSpace: number;
+                  lastMeasure: Measure;
+                }> = [];
+
+                return (
+                  <>
+                    {pageSystems.map((system, sysIdx) => {
+                      const globalSysIdx = system.systemIndex !== undefined ? system.systemIndex : systems.indexOf(system);
+                      const extraSpace = getSystemExtraSpace(system, globalSysIdx);
+                      const systemY = currentSystemY;
+                      currentSystemY += measureBlockHeight + systemGap + extraSpace;
+
+                      const lastM = system.measures[system.measures.length - 1]?.measure;
+                      if (lastM) {
+                        systemPositions.push({
+                          globalSysIdx,
+                          systemY,
+                          measureBlockHeight,
+                          extraSpace,
+                          lastMeasure: lastM,
+                        });
+                      }
 
                 // Precompute layout positions for measures in this system
                 let accX = staffMarginLeft;
@@ -1525,6 +1573,27 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                   </g>
                 );
               })}
+
+                    {/* Interactive Vertical Space Tool Layer */}
+                    <PageSpacingLayer
+                      pageIndex={pageIndex}
+                      pageWidth={pageWidth}
+                      staffMarginLeft={staffMarginLeft}
+                      staffMarginRight={staffMarginRight}
+                      systems={pageSystems}
+                      systemPositions={systemPositions}
+                      spacingObjects={score.spacingObjects || []}
+                      selection={selection}
+                      toolMode={toolMode}
+                      onSelectSpace={onSelectSpace}
+                      onAddSpace={onAddSpace}
+                      onUpdateSpace={onUpdateSpace}
+                      onDeleteSpace={onDeleteSpace}
+                      isPrintView={isPrintView}
+                    />
+                  </>
+                );
+              })()}
 
               {/* Canonical Score Page Footer */}
               <g className="score-footer score-page-footer">

@@ -11,6 +11,7 @@ import {
   Maximize2,
   Repeat,
   CornerDownLeft,
+  MoveVertical,
 } from 'lucide-react';
 
 interface MeasureContextMenuProps {
@@ -26,6 +27,10 @@ interface MeasureContextMenuProps {
   onResetWidth: (measureId: string) => void;
   onOpenNavigation?: (measure: Measure) => void;
   onToggleLineBreak?: (measureId: string) => void;
+  onAddSpaceBelow?: (measureId: string) => void;
+  onCopyMeasure?: (measureId: string) => void;
+  onPasteIntoMeasure?: (measureId: string) => void;
+  hasClipboardContent?: boolean;
 }
 
 export const MeasureContextMenu: React.FC<MeasureContextMenuProps> = ({
@@ -41,6 +46,10 @@ export const MeasureContextMenu: React.FC<MeasureContextMenuProps> = ({
   onResetWidth,
   onOpenNavigation,
   onToggleLineBreak,
+  onAddSpaceBelow,
+  onCopyMeasure,
+  onPasteIntoMeasure,
+  hasClipboardContent,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -100,6 +109,58 @@ export const MeasureContextMenu: React.FC<MeasureContextMenuProps> = ({
         <Copy className="w-3.5 h-3.5 text-stone-500" />
         <span>Duplicate Measure</span>
       </button>
+
+      {/* Copy Measure */}
+      {onCopyMeasure && (
+        <button
+          onClick={() => {
+            onCopyMeasure(measure.id);
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800"
+        >
+          <span className="flex items-center space-x-2">
+            <Copy className="w-3.5 h-3.5 text-stone-500" />
+            <span>Copy Measure</span>
+          </span>
+          <span className="text-[10px] text-stone-400 font-mono">Ctrl+C</span>
+        </button>
+      )}
+
+      {/* Paste into Measure */}
+      {onPasteIntoMeasure && (
+        <button
+          onClick={() => {
+            onPasteIntoMeasure(measure.id);
+            onClose();
+          }}
+          disabled={!hasClipboardContent}
+          className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800 disabled:opacity-35"
+        >
+          <span className="flex items-center space-x-2">
+            <Clipboard className="w-3.5 h-3.5 text-stone-500" />
+            <span>Paste Here</span>
+          </span>
+          <span className="text-[10px] text-stone-400 font-mono">Ctrl+V</span>
+        </button>
+      )}
+
+      {/* Insert Space Below */}
+      {onAddSpaceBelow && (
+        <button
+          onClick={() => {
+            onAddSpaceBelow(measure.id);
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-sky-50 flex items-center justify-between text-stone-800"
+        >
+          <span className="flex items-center space-x-2 text-sky-900 font-medium">
+            <MoveVertical className="w-3.5 h-3.5 text-sky-600" />
+            <span>Add Vertical Space Below</span>
+          </span>
+          <span className="text-[10px] text-sky-600 font-mono">↕</span>
+        </button>
+      )}
 
       {/* Repeat & Navigation */}
       <button

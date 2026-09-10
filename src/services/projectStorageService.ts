@@ -137,6 +137,17 @@ export class ProjectStorageService {
   }
 
   /**
+   * Save a complete list of projects directly to localStorage
+   */
+  public static saveProjects(projects: SavedProject[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+    } catch (e) {
+      console.warn('Failed to save projects to localStorage:', e);
+    }
+  }
+
+  /**
    * Delete a project from saved list.
    */
   public static deleteProject(projectId: string): SavedProject[] {

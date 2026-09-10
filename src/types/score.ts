@@ -29,7 +29,8 @@ export type ToolMode =
   | 'lyrics'
   | 'chord_symbol'
   | 'symbol'
-  | 'navigation';
+  | 'navigation'
+  | 'space';
 
 export type BarlineType =
   | 'single'
@@ -266,6 +267,15 @@ export interface ScoreTextAnnotation {
   offsetY?: number;
 }
 
+export interface SpacingObject {
+  id: string;
+  afterMeasureId?: string; // ID of the measure after which this space appears
+  afterMeasureNumber?: number; // 1-based measure number
+  systemIndex?: number; // 0-based system index
+  pageIndex?: number; // 0-based page index
+  amount: number; // vertical spacing in pixels/points (e.g. 30)
+}
+
 export interface Score {
   id: string;
   version: string;
@@ -276,6 +286,7 @@ export interface Score {
   textAnnotations?: ScoreTextAnnotation[];
   textObjects?: ScoreTextAnnotation[];
   voltas?: Volta[];
+  spacingObjects?: SpacingObject[];
 }
 
 /**
@@ -308,7 +319,62 @@ export interface SelectionState {
   chordSymbolId?: string | null;
   textAnnotationId?: string | null;
   voltaId?: string | null;
-  selectionType?: 'score' | 'measure' | 'note' | 'beat' | 'chord_symbol' | 'chord' | 'lyrics' | 'symbol' | 'text' | 'volta';
+  spacingObjectId?: string | null;
+  selectedMeasureIds?: string[]; // Multiple selected measures
+  selectionType?:
+    | 'score'
+    | 'measure'
+    | 'measures'
+    | 'note'
+    | 'subdivision'
+    | 'beat'
+    | 'chord_symbol'
+    | 'chord'
+    | 'lyrics'
+    | 'symbol'
+    | 'text'
+    | 'volta'
+    | 'space';
+}
+
+export type ClipboardContentType =
+  | 'note'
+  | 'subdivision'
+  | 'beat'
+  | 'measure'
+  | 'measures'
+  | 'chord'
+  | 'lyrics'
+  | 'symbol'
+  | 'text';
+
+export interface NotationClipboardData {
+  type: ClipboardContentType;
+  // If note or subdivision:
+  notePitch?: Pitch | null;
+  noteValue?: number;
+  // If beat:
+  beatIndex?: number;
+  subBeatIndex?: number;
+  beatValue?: number;
+  beatNotes?: (Pitch | null)[];
+  notes?: (Pitch | null)[];
+  beatChord?: string;
+  beatLyrics?: string;
+  lyrics?: string;
+  lyric?: string;
+  beatSymbols?: string[];
+  symbols?: string[];
+  symbol?: string;
+  // If chord only:
+  chord?: string;
+  // If complete measure:
+  measure?: Measure;
+  // If multiple measures:
+  measures?: Measure[];
+  // If text annotation:
+  textAnnotation?: ScoreTextAnnotation;
+  timestamp?: number;
 }
 
 export interface PianotasticProject {

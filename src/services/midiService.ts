@@ -4,7 +4,8 @@ export interface MidiDevice {
   id: string;
   name: string;
   manufacturer: string;
-  state: string;
+  state: 'connected' | 'disconnected';
+  connection?: 'open' | 'closed' | 'pending';
   isVirtual?: boolean;
 }
 
@@ -15,10 +16,20 @@ export interface MidiActivity {
   timestamp: number;
 }
 
+export type MidiConnectionStatus =
+  | 'unsupported'   // Browser does not support Web MIDI
+  | 'uninitialized' // Not yet requested
+  | 'connecting'    // Requesting permission or opening ports
+  | 'blocked'       // Permission denied or blocked by browser
+  | 'connected'     // Connected to MIDI subsystem and device(s)
+  | 'no_devices'    // Connected to subsystem but no physical devices detected
+  | 'disconnected';  // Selected device was disconnected/unplugged
+
 export type NoteListener = (pitch: Pitch, velocity: number) => void;
 export type NoteOffListener = (noteNumber: number) => void;
 export type ActiveKeyListener = (noteNumber: number, active: boolean) => void;
-export type DeviceListener = (devices: MidiDevice[]) => void;
+export type DeviceListener = (devices: MidiDevice[], activeDevice: MidiDevice | null) => void;
+export type StatusListener = (status: MidiConnectionStatus, message: string | null) => void;
 export type ActivityListener = (activity: MidiActivity) => void;
 
 class MidiService {
@@ -29,62 +40,68 @@ class MidiService {
   private noteOffListeners: Set<NoteOffListener> = new Set();
   private activeKeyListeners: Set<ActiveKeyListener> = new Set();
   private deviceListeners: Set<DeviceListener> = new Set();
+  private statusListeners: Set<StatusListener> = new Set();
   private activityListeners: Set<ActivityListener> = new Set();
 
   private isSupported = false;
+  private connectionStatus: MidiConnectionStatus = 'uninitialized';
+  private statusMessage: string | null = null;
+  private disconnectNotice: string | null = null;
+
   private connectedDevices: MidiDevice[] = [];
   private selectedDeviceId: string = '';
-  private selectedChannel: number = 0; // 0 = all/omni, 1-16 = specific channel
+  private selectedChannel: number = 0; // 0 = all/omni, 1-16
   private isVirtualEnabled = false;
-  private lastError: string | null = null;
-  private isIframeRestricted = false;
+
   private lastActivity: MidiActivity | null = null;
   private accidentalPreference: AccidentalType | null = null;
   private keySignature = 'C_major';
-  private isInitializing = false;
-  private hasInitialized = false;
 
-  // Inputs currently bearing an active onmidimessage listener
-  private attachedInputs: Set<any> = new Set();
+  // EXACTLY ONE attached input port reference
+  private activeMidiInput: any = null;
 
   // Duplicate-event & hardware bounce protection
   private activePhysicalKeys: Set<number> = new Set();
   private lastNoteOnTimestamp: Map<number, number> = new Map();
   private lastNoteOffTimestamp: Map<number, number> = new Map();
 
-  // Diagnostic metrics
-  private totalRawEvents = 0;
-  private canonicalNoteEntryCount = 0;
-
   constructor() {
-    this.isSupported = typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator;
+    this.isSupported =
+      typeof navigator !== 'undefined' &&
+      typeof (navigator as any).requestMIDIAccess === 'function';
+
+    if (!this.isSupported) {
+      this.connectionStatus = 'unsupported';
+      this.statusMessage =
+        'MIDI input is not supported in this browser. Please use a browser with Web MIDI support.';
+    }
   }
 
   public getIsSupported(): boolean {
     return this.isSupported;
   }
 
-  public getLastError(): string | null {
-    return this.lastError;
+  public getConnectionStatus(): MidiConnectionStatus {
+    return this.connectionStatus;
   }
 
-  public getIsIframeRestricted(): boolean {
-    return this.isIframeRestricted;
+  public getStatusMessage(): string | null {
+    return this.disconnectNotice || this.statusMessage;
   }
 
-  public getIsVirtualEnabled(): boolean {
-    return this.isVirtualEnabled;
+  public getConnectedDevices(): MidiDevice[] {
+    return this.connectedDevices;
   }
 
   public getSelectedDeviceId(): string {
     return this.selectedDeviceId;
   }
 
-  public setSelectedDeviceId(id: string) {
-    if (this.selectedDeviceId === id) return;
-    this.selectedDeviceId = id;
-    this.attachInputs();
-    this.notifyDeviceListeners();
+  public getActiveDevice(): MidiDevice | null {
+    if (!this.selectedDeviceId || this.selectedDeviceId === 'all') {
+      return this.connectedDevices[0] || null;
+    }
+    return this.connectedDevices.find((d) => d.id === this.selectedDeviceId) || null;
   }
 
   public getSelectedChannel(): number {
@@ -107,114 +124,135 @@ class MidiService {
     this.keySignature = key;
   }
 
-  public getCanonicalNoteEntryCount(): number {
-    return this.canonicalNoteEntryCount;
+  public setVirtualDevice(enabled: boolean) {
+    this.isVirtualEnabled = enabled;
+    this.refreshDevices();
+  }
+
+  public getIsVirtualEnabled(): boolean {
+    return this.isVirtualEnabled;
+  }
+
+  /**
+   * Connect to Web MIDI.
+   * Handles macOS permission flow, device enumeration, and class-compliant USB device opening.
+   */
+  public async connect(): Promise<boolean> {
+    if (!this.isSupported) {
+      this.connectionStatus = 'unsupported';
+      this.statusMessage =
+        'MIDI input is not supported in this browser. Please use a browser with Web MIDI support.';
+      this.notifyStatus();
+      return false;
+    }
+
+    this.connectionStatus = 'connecting';
+    this.statusMessage = 'Requesting MIDI access...';
+    this.disconnectNotice = null;
+    this.notifyStatus();
+
+    try {
+      // macOS Web MIDI requirement: do not request sysex if we only need note input
+      const access = await (navigator as any).requestMIDIAccess({ sysex: false });
+      this.midiAccess = access;
+
+      // Listen for hotplugging: USB connect / disconnect
+      this.midiAccess.onstatechange = (event: any) => this.handleStateChange(event);
+
+      await this.refreshDevices();
+
+      if (this.connectedDevices.length > 0) {
+        this.connectionStatus = 'connected';
+        this.statusMessage = null;
+      } else {
+        this.connectionStatus = 'no_devices';
+        this.statusMessage = 'No MIDI keyboard detected.';
+      }
+
+      this.notifyStatus();
+      return true;
+    } catch (err: any) {
+      const errStr = (err?.message || String(err)).toLowerCase();
+      const isDenied =
+        err?.name === 'SecurityError' ||
+        err?.name === 'NotAllowedError' ||
+        errStr.includes('denied') ||
+        errStr.includes('blocked') ||
+        errStr.includes('permission');
+
+      if (isDenied) {
+        this.connectionStatus = 'blocked';
+        this.statusMessage =
+          'MIDI access is blocked. Please allow MIDI access in your browser and try again.';
+      } else {
+        this.connectionStatus = 'blocked';
+        this.statusMessage =
+          'MIDI access is blocked. Please allow MIDI access in your browser and try again.';
+      }
+
+      this.notifyStatus();
+      return false;
+    }
   }
 
   public async initialize(): Promise<boolean> {
-    if (this.hasInitialized && this.midiAccess) {
-      this.attachInputs();
-      this.updateDevices();
-      return true;
-    }
-    if (this.isInitializing) {
-      return false;
-    }
-    this.isInitializing = true;
-    this.lastError = null;
-    this.isIframeRestricted = false;
-
-    if (!this.isSupported) {
-      this.lastError = 'Web MIDI is unavailable in this browser or permission was not granted.';
-      this.isInitializing = false;
-      return false;
-    }
-
-    try {
-      this.midiAccess = await (navigator as any).requestMIDIAccess({ sysex: false });
-      this.hasInitialized = true;
-
-      // Handle hotplugging: detect devices connected or disconnected after app is open
-      this.midiAccess.onstatechange = this.handleStateChange;
-
-      this.updateDevices();
-      this.attachInputs();
-      this.isInitializing = false;
-      return true;
-    } catch (err: any) {
-      this.isInitializing = false;
-      const msg = err?.message || String(err);
-      if (
-        err?.name === 'SecurityError' ||
-        msg.toLowerCase().includes('permissions policy') ||
-        msg.toLowerCase().includes('disallowed')
-      ) {
-        this.isIframeRestricted = true;
-        this.lastError =
-          'Web MIDI is restricted inside embedded iframe previews. Open the app in a new tab to connect physical MIDI keyboards.';
-      } else {
-        this.lastError = `MIDI input is unavailable in this browser or permission was not granted (${msg}).`;
-      }
-      this.updateDevices();
-      return false;
-    }
+    return this.connect();
   }
 
-  public setVirtualDevice(enabled: boolean) {
-    this.isVirtualEnabled = enabled;
-    this.updateDevices();
+  /**
+   * Disconnects the active MIDI listener intentionally.
+   */
+  public disconnect() {
+    this.detachActiveListener();
+    this.connectionStatus = 'disconnected';
+    this.statusMessage = 'Disconnected';
+    this.disconnectNotice = null;
+    this.notifyStatus();
   }
 
-  public triggerVirtualNote(pitch: Pitch, velocity: number = 95) {
-    const midi = this.pitchToMidiNote(pitch);
-    const now = performance.now();
-
-    // Prevent virtual key re-triggering while already pressed
-    if (this.activePhysicalKeys.has(midi)) return;
-    this.activePhysicalKeys.add(midi);
-    this.lastNoteOnTimestamp.set(midi, now);
-    this.canonicalNoteEntryCount++;
-
-    this.lastActivity = {
-      noteNumber: midi,
-      pitch,
-      velocity,
-      timestamp: Date.now(),
-    };
-    this.notifyActivity(this.lastActivity);
-    this.notifyActiveKey(midi, true);
-
-    if (this.canonicalNoteListener) {
-      this.canonicalNoteListener(pitch, velocity);
-    }
-
-    setTimeout(() => {
-      this.activePhysicalKeys.delete(midi);
-      this.lastNoteOffTimestamp.set(midi, performance.now());
-      this.notifyActiveKey(midi, false);
-      this.notifyNoteOff(midi);
-    }, 250);
+  /**
+   * Select a specific MIDI Input device.
+   * Ensures the previous listener is completely removed before attaching the new one.
+   */
+  public setSelectedDeviceId(id: string) {
+    if (this.selectedDeviceId === id) return;
+    this.selectedDeviceId = id;
+    this.attachSelectedInput();
+    this.notifyDevices();
   }
 
-  private handleStateChange = () => {
-    // Hotplugging lifecycle: refresh device inventory and re-attach listener
-    this.updateDevices();
-    this.attachInputs();
-  };
-
-  public updateDevices() {
+  /**
+   * Refreshes the list of connected MIDI input devices.
+   */
+  public async refreshDevices(): Promise<MidiDevice[]> {
     const devices: MidiDevice[] = [];
 
     if (this.midiAccess && this.midiAccess.inputs) {
-      this.midiAccess.inputs.forEach((input: any) => {
-        devices.push({
-          id: input.id,
-          name: input.name || 'MIDI Keyboard',
-          manufacturer: input.manufacturer || 'Generic',
-          state: input.state || 'connected',
-          isVirtual: false,
+      // Support both Iterable Map and forEach
+      const inputs = this.midiAccess.inputs;
+      if (typeof inputs.values === 'function') {
+        for (const input of inputs.values()) {
+          devices.push({
+            id: input.id,
+            name: input.name || 'USB MIDI Keyboard',
+            manufacturer: input.manufacturer || 'Class Compliant',
+            state: input.state || 'connected',
+            connection: input.connection,
+            isVirtual: false,
+          });
+        }
+      } else if (typeof inputs.forEach === 'function') {
+        inputs.forEach((input: any) => {
+          devices.push({
+            id: input.id,
+            name: input.name || 'USB MIDI Keyboard',
+            manufacturer: input.manufacturer || 'Class Compliant',
+            state: input.state || 'connected',
+            connection: input.connection,
+            isVirtual: false,
+          });
         });
-      });
+      }
     }
 
     if (this.isVirtualEnabled) {
@@ -229,94 +267,105 @@ class MidiService {
 
     this.connectedDevices = devices;
 
-    // If selectedDeviceId is not set or no longer present in devices, pick the first valid device
-    const hardwareDevices = devices.filter((d) => !d.isVirtual);
-    const hasCurrent =
-      this.selectedDeviceId === 'all' ||
-      devices.some((d) => d.id === this.selectedDeviceId);
-
-    if (!hasCurrent) {
-      if (hardwareDevices.length > 0) {
-        // Automatically default to the single first physical device (avoids dual-port echo)
-        this.selectedDeviceId = hardwareDevices[0].id;
-      } else if (devices.length > 0) {
-        this.selectedDeviceId = devices[0].id;
-      } else {
-        this.selectedDeviceId = '';
-      }
+    // Automatically select the first connected device if current selection is invalid
+    const exists = devices.some((d) => d.id === this.selectedDeviceId);
+    if (!exists) {
+      const physicalDevice = devices.find((d) => !d.isVirtual);
+      this.selectedDeviceId = physicalDevice ? physicalDevice.id : devices[0]?.id || '';
     }
 
-    this.notifyDeviceListeners();
-  }
-
-  private notifyDeviceListeners() {
-    this.deviceListeners.forEach((l) => l(this.connectedDevices));
-  }
-
-  private notifyActivity(activity: MidiActivity) {
-    this.activityListeners.forEach((l) => l(activity));
-  }
-
-  private notifyActiveKey(noteNumber: number, active: boolean) {
-    this.activeKeyListeners.forEach((l) => l(noteNumber, active));
-  }
-
-  private notifyNoteOff(noteNumber: number) {
-    this.noteOffListeners.forEach((l) => l(noteNumber));
+    await this.attachSelectedInput();
+    this.notifyDevices();
+    return devices;
   }
 
   /**
-   * Detaches midimessage handlers from all currently attached input ports
+   * Detaches midimessage handler from the currently active input port.
    */
-  private detachAllInputs() {
-    this.attachedInputs.forEach((input) => {
+  private detachActiveListener() {
+    if (this.activeMidiInput) {
       try {
-        input.onmidimessage = null;
-      } catch (e) {
+        this.activeMidiInput.onmidimessage = null;
+      } catch {
         // ignore detached port errors
       }
-    });
-    this.attachedInputs.clear();
+      this.activeMidiInput = null;
+    }
   }
 
   /**
-   * Attaches the single canonical handleMidiMessage listener to the selected MIDI input.
-   * Cleans up all previous listeners first to guarantee zero duplicate listeners.
+   * Attaches exactly ONE listener to the selected input port.
+   * Calls open() on macOS to ensure port is actively receiving packets.
    */
-  private attachInputs() {
-    this.detachAllInputs();
+  private async attachSelectedInput(): Promise<void> {
+    this.detachActiveListener();
 
-    if (!this.midiAccess || !this.midiAccess.inputs) return;
-
-    const availableInputs: any[] = [];
-    this.midiAccess.inputs.forEach((input: any) => {
-      availableInputs.push(input);
-    });
-
-    if (availableInputs.length === 0) return;
-
-    // If selectedDeviceId is empty, select the first available input
-    if (!this.selectedDeviceId) {
-      this.selectedDeviceId = availableInputs[0].id;
+    if (!this.midiAccess || !this.midiAccess.inputs || !this.selectedDeviceId) {
+      return;
     }
 
-    if (this.selectedDeviceId === 'all') {
-      // If user explicitly chose "All Devices (Merge)"
-      availableInputs.forEach((input) => {
-        if (input.state === 'connected') {
-          input.onmidimessage = this.handleMidiMessage;
-          this.attachedInputs.add(input);
+    // Find the input port matching the selected device
+    let targetPort: any = null;
+    const inputs = this.midiAccess.inputs;
+
+    if (typeof inputs.get === 'function') {
+      targetPort = inputs.get(this.selectedDeviceId);
+    }
+
+    if (!targetPort && typeof inputs.values === 'function') {
+      for (const input of inputs.values()) {
+        if (input.id === this.selectedDeviceId) {
+          targetPort = input;
+          break;
         }
-      });
-    } else {
-      // Default & Recommended: attach ONLY to the single selected device
-      const target = availableInputs.find((i) => i.id === this.selectedDeviceId);
-      if (target && target.state === 'connected') {
-        target.onmidimessage = this.handleMidiMessage;
-        this.attachedInputs.add(target);
       }
     }
+
+    if (!targetPort) return;
+
+    try {
+      // On macOS, explicitly opening the port is essential for class-compliant USB devices
+      if (typeof targetPort.open === 'function' && targetPort.connection !== 'open') {
+        await targetPort.open();
+      }
+
+      targetPort.onmidimessage = this.handleMidiMessage;
+      this.activeMidiInput = targetPort;
+      this.disconnectNotice = null;
+    } catch (e) {
+      console.warn('Failed to open MIDI input port on macOS:', e);
+    }
   }
+
+  /**
+   * Hotplugging handler: detects device disconnects and reconnects.
+   */
+  private handleStateChange = async (event: any) => {
+    const port = event?.port;
+    if (!port || port.type !== 'input') return;
+
+    if (port.state === 'disconnected') {
+      // If the currently selected device was disconnected
+      if (port.id === this.selectedDeviceId) {
+        this.detachActiveListener();
+        this.disconnectNotice = 'MIDI Keyboard disconnected.';
+        this.connectionStatus = 'disconnected';
+        this.notifyStatus();
+      }
+    }
+
+    await this.refreshDevices();
+
+    if (port.state === 'connected') {
+      // If a device was plugged back in, clear disconnect notice
+      if (this.connectedDevices.length > 0) {
+        this.disconnectNotice = null;
+        this.connectionStatus = 'connected';
+        this.statusMessage = null;
+        this.notifyStatus();
+      }
+    }
+  };
 
   /**
    * The ONE and ONLY canonical Web MIDI message parser & dispatcher.
@@ -325,7 +374,6 @@ class MidiService {
   private handleMidiMessage = (event: any) => {
     if (!event || !event.data || event.data.length < 2) return;
 
-    this.totalRawEvents++;
     const data = event.data;
     const statusByte = data[0];
     const noteNumber = data[1];
@@ -363,24 +411,19 @@ class MidiService {
     // 2. HANDLE NOTE ON
     if (isTrueNoteOn) {
       // GUARD A: Key Already Depressed
-      // If the user physically pressed C4 once and is holding it down, or if a secondary port /
-      // secondary channel (e.g. dual voice on a piano) sends a second Note On for the same note:
-      // it is already active. Suppress the duplicate!
+      // If the user physically pressed a key and is holding it down:
+      // it is already active. Suppress repeated artificial Note On events!
       if (this.activePhysicalKeys.has(noteNumber)) {
         return;
       }
 
-      // GUARD B: Hardware Multi-Port / Echo Debounce Window
-      // Real human fingers cannot strike the same piano key twice within 65 milliseconds.
-      // Any Note On arriving within 65ms of the previous Note On for the same note number is a
-      // driver echo, dual port duplicate, or key bounce.
+      // GUARD B: Hardware Multi-Port / Echo Debounce Window (65ms)
       const lastOnTime = this.lastNoteOnTimestamp.get(noteNumber) || 0;
       if (now - lastOnTime < 65) {
         return;
       }
 
-      // GUARD C: Switch Chatter / Release Bounce Guard
-      // If a Note On arrives within 25ms of a Note Off for the exact same note, suppress contact chatter.
+      // GUARD C: Switch Chatter / Release Bounce Guard (25ms)
       const lastOffTime = this.lastNoteOffTimestamp.get(noteNumber) || 0;
       if (now - lastOffTime < 25) {
         return;
@@ -389,7 +432,6 @@ class MidiService {
       // VALID UNIQUE PHYSICAL KEY PRESS
       this.activePhysicalKeys.add(noteNumber);
       this.lastNoteOnTimestamp.set(noteNumber, now);
-      this.canonicalNoteEntryCount++;
 
       const pitch = this.midiNoteToPitch(
         noteNumber,
@@ -416,6 +458,10 @@ class MidiService {
     }
   };
 
+  /**
+   * Converts a MIDI note number (e.g. 60 = C4, 69 = A4, 72 = C5) into an exact musical Pitch.
+   * Exact octave calculation: 60 -> C4, 72 -> C5, 48 -> C3. Never relies on Low/Middle/High.
+   */
   public midiNoteToPitch(
     midi: number,
     accidentalPreference?: AccidentalType | null,
@@ -463,7 +509,7 @@ class MidiService {
         { step: 'G' },                      // 7: G
         { step: 'G', accidental: 'sharp' }, // 8: G#
         { step: 'A' },                      // 9: A
-        { step: 'B', accidental: 'flat' },  // 10: Bb (standard default in musical notation)
+        { step: 'B', accidental: 'flat' },  // 10: Bb
         { step: 'B' },                      // 11: B
       ];
       if (accidentalPreference === 'sharp') {
@@ -519,8 +565,40 @@ class MidiService {
   }
 
   /**
+   * Virtual keyboard note trigger for testing without physical hardware.
+   */
+  public triggerVirtualNote(pitch: Pitch, velocity: number = 95) {
+    const midi = this.pitchToMidiNote(pitch);
+    const now = performance.now();
+
+    if (this.activePhysicalKeys.has(midi)) return;
+    this.activePhysicalKeys.add(midi);
+    this.lastNoteOnTimestamp.set(midi, now);
+
+    this.lastActivity = {
+      noteNumber: midi,
+      pitch,
+      velocity,
+      timestamp: Date.now(),
+    };
+    this.notifyActivity(this.lastActivity);
+    this.notifyActiveKey(midi, true);
+
+    if (this.canonicalNoteListener) {
+      this.canonicalNoteListener(pitch, velocity);
+    }
+
+    setTimeout(() => {
+      this.activePhysicalKeys.delete(midi);
+      this.lastNoteOffTimestamp.set(midi, performance.now());
+      this.notifyActiveKey(midi, false);
+      this.notifyNoteOff(midi);
+    }, 250);
+  }
+
+  /**
    * Registers the single canonical note listener for workspace note entry.
-   * Automatically replaces any previous listener to ensure exactly one listener exists.
+   * Automatically replaces any previous listener to guarantee zero duplicate listeners.
    */
   public onNote(listener: NoteListener): () => void {
     this.canonicalNoteListener = listener;
@@ -547,9 +625,17 @@ class MidiService {
 
   public onDevicesChange(listener: DeviceListener): () => void {
     this.deviceListeners.add(listener);
-    listener(this.connectedDevices);
+    listener(this.connectedDevices, this.getActiveDevice());
     return () => {
       this.deviceListeners.delete(listener);
+    };
+  }
+
+  public onStatusChange(listener: StatusListener): () => void {
+    this.statusListeners.add(listener);
+    listener(this.connectionStatus, this.getStatusMessage());
+    return () => {
+      this.statusListeners.delete(listener);
     };
   }
 
@@ -563,15 +649,30 @@ class MidiService {
     };
   }
 
-  public getConnectedDevices(): MidiDevice[] {
-    return this.connectedDevices;
+  private notifyDevices() {
+    const active = this.getActiveDevice();
+    this.deviceListeners.forEach((l) => l(this.connectedDevices, active));
   }
 
-  /**
-   * Cleanup on unmount or reset
-   */
+  private notifyStatus() {
+    const msg = this.getStatusMessage();
+    this.statusListeners.forEach((l) => l(this.connectionStatus, msg));
+  }
+
+  private notifyActivity(activity: MidiActivity) {
+    this.activityListeners.forEach((l) => l(activity));
+  }
+
+  private notifyActiveKey(noteNumber: number, active: boolean) {
+    this.activeKeyListeners.forEach((l) => l(noteNumber, active));
+  }
+
+  private notifyNoteOff(noteNumber: number) {
+    this.noteOffListeners.forEach((l) => l(noteNumber));
+  }
+
   public dispose() {
-    this.detachAllInputs();
+    this.detachActiveListener();
     this.canonicalNoteListener = null;
     this.activePhysicalKeys.clear();
     this.lastNoteOnTimestamp.clear();

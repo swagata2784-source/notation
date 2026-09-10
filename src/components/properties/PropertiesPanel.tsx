@@ -13,6 +13,7 @@ import {
   VoltaEnding,
   ScoreTextAnnotation,
   Volta,
+  SpacingObject,
 } from '../../types/score';
 import { KEY_SIGNATURES } from '../../utils/musicTheory';
 import {
@@ -45,6 +46,7 @@ import {
   Lock,
   CornerDownLeft,
   Bookmark,
+  MoveVertical,
 } from 'lucide-react';
 
 interface PropertiesPanelProps {
@@ -88,6 +90,9 @@ interface PropertiesPanelProps {
   onEditTextAnnotation?: (textAnnotation: ScoreTextAnnotation) => void;
   onDeleteTextAnnotation?: (textId: string) => void;
   onUpdateTextAnnotation?: (textId: string, patch: Partial<ScoreTextAnnotation>) => void;
+  onUpdateSpace?: (spaceId: string, patch: Partial<SpacingObject>) => void;
+  onDeleteSpace?: (spaceId: string) => void;
+  onAddSpace?: (afterMeasureId: string, amount: number, systemIndex: number) => void;
 }
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
@@ -125,6 +130,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onEditTextAnnotation,
   onDeleteTextAnnotation,
   onUpdateTextAnnotation,
+  onUpdateSpace,
+  onDeleteSpace,
+  onAddSpace,
 }) => {
   if (!isOpen) return null;
 
@@ -134,6 +142,15 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const activeMeasure = score.measures[measureIdx] || score.measures[0];
   const beatIndex = selection.beatIndex !== undefined ? selection.beatIndex : 0;
   const subBeatIndex = selection.subBeatIndex || 0;
+
+  // Selected Spacing Object (Vertical system spacing)
+  const allSpaces = score.spacingObjects || [];
+  const selectedSpacingObject = allSpaces.find(
+    (s) =>
+      s.id === selection.spacingObjectId ||
+      (selection.selectionType === 'space' && s.id === (selection as any).spacingObjectId) ||
+      (selection.selectionType === 'space' && s.afterMeasureId === selectedMeasureId)
+  );
 
   // Selected Text Annotation (Page-level independent text object)
   const allText = score.textObjects || score.textAnnotations || [];
@@ -285,6 +302,66 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
         {/* ================= TAB 1: BEAT & OBJECT CONTROLS ================= */}
         {activeTab === 'active' && (
           <>
+            {/* Selected Vertical Spacing Object Controls */}
+            {selectedSpacingObject && (
+              <div className="bg-sky-50/90 rounded-lg p-2.5 border border-sky-300 shadow-2xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1.5">
+                    <MoveVertical className="w-3.5 h-3.5 text-sky-700" />
+                    <span className="font-bold text-sky-950 text-[11px] uppercase tracking-wide">
+                      Vertical System Space
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onDeleteSpace?.(selectedSpacingObject.id)}
+                    className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                    title="Remove Space"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="bg-white rounded border border-sky-200 p-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-stone-700">Distance</span>
+                    <div className="flex items-center space-x-1.5">
+                      <input
+                        type="number"
+                        min="0"
+                        max="400"
+                        step="5"
+                        value={selectedSpacingObject.amount}
+                        onChange={(e) =>
+                          onUpdateSpace?.(selectedSpacingObject.id, {
+                            amount: Math.max(0, Math.min(400, parseInt(e.target.value) || 0)),
+                          })
+                        }
+                        className="w-16 px-1.5 py-0.5 text-right font-mono font-bold text-xs border border-stone-300 rounded focus:border-sky-500 focus:outline-none"
+                      />
+                      <span className="text-stone-500 text-[11px]">px</span>
+                    </div>
+                  </div>
+
+                  {/* Preset Steppers */}
+                  <div className="grid grid-cols-4 gap-1 pt-1">
+                    {[15, 30, 50, 80].map((amt) => (
+                      <button
+                        key={amt}
+                        onClick={() => onUpdateSpace?.(selectedSpacingObject.id, { amount: amt })}
+                        className={`py-1 text-[10px] font-bold rounded border transition-colors ${
+                          selectedSpacingObject.amount === amt
+                            ? 'bg-sky-600 text-white border-sky-600'
+                            : 'bg-stone-50 hover:bg-stone-100 text-stone-700 border-stone-200'
+                        }`}
+                      >
+                        {amt}px
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Selected Score Text Annotation Controls */}
             {selectedTextAnnotation && (
               <div className="bg-blue-50/80 rounded-lg p-2.5 border border-blue-200 shadow-2xs space-y-2.5">

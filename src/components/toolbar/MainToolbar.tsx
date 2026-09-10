@@ -11,6 +11,10 @@ import {
   Repeat,
   Baseline,
   Sliders,
+  MoveVertical,
+  Scissors,
+  Copy,
+  ClipboardPaste,
 } from 'lucide-react';
 
 interface MainToolbarProps {
@@ -29,6 +33,10 @@ interface MainToolbarProps {
   activePositionText?: string;
   isInspectorOpen?: boolean;
   onToggleInspector?: () => void;
+  onCut?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  hasClipboardContent?: boolean;
 }
 
 export const MainToolbar: React.FC<MainToolbarProps> = ({
@@ -43,11 +51,16 @@ export const MainToolbar: React.FC<MainToolbarProps> = ({
   activePositionText = 'Bar 1 • Beat 1 • 1 note/beat',
   isInspectorOpen = true,
   onToggleInspector,
+  onCut,
+  onCopy,
+  onPaste,
+  hasClipboardContent = false,
 }) => {
   const tools: { id: ToolMode; label: string; icon: React.ReactNode; shortcut: string }[] = [
     { id: 'select', label: 'Select', icon: <MousePointer className="w-3.5 h-3.5" />, shortcut: 'V' },
     { id: 'note', label: 'Note', icon: <Music className="w-3.5 h-3.5" />, shortcut: 'N' },
     { id: 'rest', label: 'Rest', icon: <Minus className="w-3.5 h-3.5" />, shortcut: 'R' },
+    { id: 'space', label: 'Space', icon: <MoveVertical className="w-3.5 h-3.5" />, shortcut: '↕' },
     { id: 'eraser', label: 'Eraser', icon: <Eraser className="w-3.5 h-3.5" />, shortcut: 'Del' },
     { id: 'tie', label: 'Tie', icon: <Link className="w-3.5 h-3.5" />, shortcut: 'T' },
     { id: 'chord', label: 'Chord', icon: <Layers className="w-3.5 h-3.5" />, shortcut: 'K' },
@@ -173,6 +186,43 @@ export const MainToolbar: React.FC<MainToolbarProps> = ({
             </button>
           ))}
         </div>
+
+        {/* Quick Clipboard Actions */}
+        {(onCut || onCopy || onPaste) && (
+          <div className="flex items-center space-x-0.5 bg-white p-0.5 rounded-lg border border-stone-200/90 shadow-2xs">
+            {onCut && (
+              <button
+                id="toolbar-cut-btn"
+                onClick={onCut}
+                title="Cut Selection (Ctrl+X / ⌘X)"
+                className="p-1 rounded text-stone-700 hover:bg-stone-100 hover:text-stone-900 transition-colors"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onCopy && (
+              <button
+                id="toolbar-copy-btn"
+                onClick={onCopy}
+                title="Copy Selection (Ctrl+C / ⌘C)"
+                className="p-1 rounded text-stone-700 hover:bg-stone-100 hover:text-stone-900 transition-colors"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onPaste && (
+              <button
+                id="toolbar-paste-btn"
+                onClick={onPaste}
+                disabled={!hasClipboardContent}
+                title={hasClipboardContent ? "Paste into current bar/beat (Ctrl+V / ⌘V)" : "Nothing copied to clipboard"}
+                className="p-1 rounded text-stone-700 hover:bg-stone-100 hover:text-stone-900 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Inspector Panel Toggle Button */}
         {onToggleInspector && (

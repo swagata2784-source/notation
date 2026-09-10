@@ -1,4 +1,5 @@
 import { jsPDF } from 'jspdf';
+import { svg2pdf } from 'svg2pdf.js';
 import html2canvas from 'html2canvas-pro';
 import {
   Score,
@@ -162,25 +163,41 @@ export class ExportService {
       }
 
       const pageEl = pageElements[i];
+      const svgEl = pageEl.querySelector('svg');
 
-      try {
-        const canvas = await html2canvas(pageEl, {
-          scale: 2.5, // Crisp 300 DPI equivalent
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          logging: false,
-          ignoreElements: (element) => {
-            if (mode === 'professional' && element.classList.contains('pianotastic-learning-layer')) {
-              return true;
-            }
-            return false;
-          },
-        });
+      if (svgEl) {
+        try {
+          // Clone the SVG DOM node to prevent modifying live UI
+          const clonedSvg = svgEl.cloneNode(true) as SVGElement;
 
-        const imgData = canvas.toDataURL('image/png', 1.0);
-        pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
-      } catch (err) {
-        console.error('Failed to render page to canvas for PDF:', err);
+          // If professional engraving mode, remove learning layer elements
+          if (mode === 'professional') {
+            clonedSvg.querySelectorAll('.pianotastic-learning-layer').forEach((el) => el.remove());
+          }
+
+          // True vector PDF rendering: converts SVG paths, text, strokes, and glyphs directly into vector PDF objects
+          await svg2pdf(clonedSvg, pdf, {
+            x: 0,
+            y: 0,
+            width: pageWidth,
+            height: pageHeight,
+          });
+        } catch (vectorErr) {
+          console.warn('Vector PDF conversion fallback for page ' + (i + 1), vectorErr);
+          // Fallback if browser security sandbox blocks inline SVG serialization
+          try {
+            const canvas = await html2canvas(pageEl, {
+              scale: 3.5, // 400+ DPI fallback
+              useCORS: true,
+              backgroundColor: '#ffffff',
+              logging: false,
+            });
+            const imgData = canvas.toDataURL('image/png', 1.0);
+            pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
+          } catch (err) {
+            console.error('Failed to render page for PDF:', err);
+          }
+        }
       }
     }
 

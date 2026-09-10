@@ -16,6 +16,8 @@ import {
   Calendar,
   CheckCircle2,
   ChevronRight,
+  Cloud,
+  RefreshCw,
 } from 'lucide-react';
 
 interface HomeScreenProps {
@@ -26,6 +28,10 @@ interface HomeScreenProps {
   onOpenNewPage?: () => void;
   onDeleteProject: (projectId: string) => void;
   onImportFile?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  currentUser?: { email?: string | null; uid: string } | null;
+  onOpenAuthModal?: () => void;
+  onSyncCloud?: () => void;
+  isSyncing?: boolean;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
@@ -36,6 +42,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenNewPage,
   onDeleteProject,
   onImportFile,
+  currentUser,
+  onOpenAuthModal,
+  onSyncCloud,
+  isSyncing = false,
 }) => {
   const [hoveredProjectId, setHoveredProjectId] = useState<string | null>(null);
 
@@ -101,6 +111,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
+          {/* Cloud Sync Account Button */}
+          {onOpenAuthModal && (
+            <button
+              id="home-cloud-sync-btn"
+              onClick={onOpenAuthModal}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center space-x-1.5 transition-colors shadow-2xs ${
+                currentUser
+                  ? 'bg-amber-50 border-amber-300 text-amber-950 hover:bg-amber-100'
+                  : 'border-stone-300 bg-white hover:bg-stone-50 text-stone-700'
+              }`}
+            >
+              <Cloud className={`w-3.5 h-3.5 ${currentUser ? 'text-amber-600' : 'text-stone-500'}`} />
+              <span>
+                {currentUser
+                  ? `${currentUser.email?.split('@')[0]} (Cloud Synced)`
+                  : 'Cloud Sync'}
+              </span>
+            </button>
+          )}
+
           {/* Import JSON / .pianotastic */}
           <label className="cursor-pointer px-3 py-1.5 rounded-lg border border-stone-300 hover:bg-stone-50 text-stone-700 text-xs font-semibold flex items-center space-x-1.5 transition-colors">
             <Upload className="w-3.5 h-3.5 text-stone-500" />

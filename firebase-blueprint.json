@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "NotationProject": {
+      "title": "NotationProject",
+      "description": "Pianotastic notation score project with full canonical model",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "lastModified": { "type": "string" },
+        "handTemplate": { "type": "string" },
+        "measuresCount": { "type": "number" },
+        "keySignature": { "type": "string" },
+        "tempo": { "type": "number" },
+        "taal": { "type": "string" },
+        "score": { "type": "object" }
+      },
+      "required": ["id", "userId", "name", "score", "lastModified"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "NotationProject",
+      "description": "User's private saved notation scores"
+    }
+  }
+}

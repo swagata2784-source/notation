@@ -11,6 +11,8 @@ import {
   Copy,
   ChevronRight,
   FileMusic,
+  Cloud,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ProjectLibraryModalProps {
@@ -22,6 +24,10 @@ interface ProjectLibraryModalProps {
   onDeleteProject: (projectId: string) => void;
   onDuplicateProject: (project: SavedProject) => void;
   onNewProject: () => void;
+  currentUser?: { email?: string | null; uid: string } | null;
+  onOpenAuthModal?: () => void;
+  onSyncCloud?: () => void;
+  isSyncing?: boolean;
 }
 
 export const ProjectLibraryModal: React.FC<ProjectLibraryModalProps> = ({
@@ -33,6 +39,10 @@ export const ProjectLibraryModal: React.FC<ProjectLibraryModalProps> = ({
   onDeleteProject,
   onDuplicateProject,
   onNewProject,
+  currentUser,
+  onOpenAuthModal,
+  onSyncCloud,
+  isSyncing = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -104,6 +114,43 @@ export const ProjectLibraryModal: React.FC<ProjectLibraryModalProps> = ({
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3.5 py-1.5 text-xs bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 font-medium text-stone-800 placeholder:text-stone-400"
             />
+          </div>
+        </div>
+
+        {/* Cloud Sync Status Banner */}
+        <div className="px-4 py-2 bg-stone-100/70 border-b border-stone-200 flex items-center justify-between text-xs">
+          <div className="flex items-center space-x-2 min-w-0">
+            <Cloud className={`w-3.5 h-3.5 shrink-0 ${currentUser ? 'text-amber-600' : 'text-stone-400'}`} />
+            {currentUser ? (
+              <span className="text-stone-700 font-medium truncate">
+                Cloud Sync: <span className="font-semibold text-stone-900">{currentUser.email}</span>
+              </span>
+            ) : (
+              <span className="text-stone-500 truncate">
+                Sign in with Google to sync scores across all your devices
+              </span>
+            )}
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            {currentUser && onSyncCloud && (
+              <button
+                onClick={onSyncCloud}
+                disabled={isSyncing}
+                className="px-2 py-1 bg-white hover:bg-stone-50 text-stone-700 border border-stone-200 rounded font-semibold text-[11px] flex items-center space-x-1 transition-colors"
+                title="Refresh scores from Firestore"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin text-amber-600' : ''}`} />
+                <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+              </button>
+            )}
+            {onOpenAuthModal && (
+              <button
+                onClick={onOpenAuthModal}
+                className="text-amber-700 hover:text-amber-800 font-semibold text-[11px] hover:underline"
+              >
+                {currentUser ? 'Account' : 'Sign In'}
+              </button>
+            )}
           </div>
         </div>
 
