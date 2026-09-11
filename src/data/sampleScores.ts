@@ -33,6 +33,7 @@ export const SAMPLE_SCORES: Record<string, Score> = {
       showHandLabels: true,
       showLyrics: true,
       showChordSymbols: true,
+      keyboardLayout: '61',
       zoom: 1.0,
     },
     measures: [
@@ -259,6 +260,7 @@ export const SAMPLE_SCORES: Record<string, Score> = {
       showHandLabels: true,
       showLyrics: true,
       showChordSymbols: true,
+      keyboardLayout: '61',
       zoom: 1.0,
     },
     measures: [
@@ -365,6 +367,7 @@ export const SAMPLE_SCORES: Record<string, Score> = {
       showHandLabels: false,
       showLyrics: true,
       showChordSymbols: true,
+      keyboardLayout: '61',
       zoom: 1.0,
     },
     measures: [1, 2, 3, 4].map((num) => ({

@@ -10,6 +10,7 @@ import {
   NoteDuration,
   Volta,
 } from '../types/score';
+import { INDIAN_TAALS } from './indianTaals';
 
 /**
  * Return standard musical glyph for an accidental:
@@ -48,19 +49,77 @@ export function getSuperscriptOctave(octave: number | null | undefined): string 
 }
 
 /**
- * Format a Pitch into clean letter notation with its exact octave.
- * Examples: "C⁴", "C♯⁴", "B♭³", "D⁵", "F♯²"
+ * Convert actual musical pitch octave (standard scientific pitch, where Middle C = C4 / MIDI 60)
+ * to the display octave convention based on the selected keyboard layout:
+ * - 61 Keys:
+ *     Lowest C (MIDI 36) is C¹
+ *     Middle C (MIDI 60) is C³
+ *     Highest C (MIDI 96) is C⁶
+ *     Formula: actualOctave - 1.
+ * - 76 Keys:
+ *     Lowest C is C² (MIDI 36), Middle C is C⁴ (MIDI 60). Standard scientific convention.
+ * - 88 Keys:
+ *     Lowest C is C¹ (MIDI 24), Middle C is C⁴ (MIDI 60), Highest C is C⁸ (MIDI 108).
  */
-export function formatNoteLetter(pitch: Pitch | null | undefined, defaultOctave = 4): string {
+export function getDisplayOctave(
+  actualOctave: number | null | undefined,
+  keyboardLayout: '61' | '76' | '88' = '61'
+): number {
+  const oct = typeof actualOctave === 'number' ? actualOctave : 4;
+  if (keyboardLayout === '61') {
+    // Offset by -1 so Middle C (C4) renders as C³, C2 as C¹, C7 as C⁶
+    return Math.max(0, oct - 1);
+  }
+  return oct;
+}
+
+/**
+ * Format a Pitch into clean letter notation with its exact superscript octave.
+ * Respects keyboard layout convention ('61' | '76' | '88').
+ * Examples on 61-key: Middle C -> "C³", C5 -> "C⁴", Bb3 -> "B♭²"
+ * Examples on 88-key: Middle C -> "C⁴", C5 -> "C⁵", Bb3 -> "B♭³"
+ */
+export function formatNoteLetter(
+  pitch: Pitch | null | undefined,
+  defaultOctave = 4,
+  keyboardLayout: '61' | '76' | '88' = '61'
+): string {
   if (!pitch || !pitch.step) return '—';
   const acc = getAccidentalGlyph(pitch.accidental);
-  const octNum = typeof pitch.octave === 'number' ? pitch.octave : defaultOctave;
-  const oct = getSuperscriptOctave(octNum);
+  const actualOct = typeof pitch.octave === 'number' ? pitch.octave : defaultOctave;
+  const dispOct = getDisplayOctave(actualOct, keyboardLayout);
+  const oct = getSuperscriptOctave(dispOct);
   return `${pitch.step}${acc}${oct}`;
 }
 
-export function formatNoteWithOctave(pitch: Pitch | null | undefined, defaultOctave = 4): string {
-  return formatNoteLetter(pitch, defaultOctave);
+export function formatNoteWithOctave(
+  pitch: Pitch | null | undefined,
+  defaultOctave = 4,
+  keyboardLayout: '61' | '76' | '88' = '61'
+): string {
+  return formatNoteLetter(pitch, defaultOctave, keyboardLayout);
+}
+
+/**
+ * Format Time Signature + Taal label above notation according to user-friendly specification:
+ * Examples:
+ *   Time Signature : 4/4 (Keharwa Taal)
+ *   Time Signature : 3/4 (Dadra Taal)
+ *   Time Signature : 5/4 (5-Matra Taal)
+ *   Time Signature : 4/4 (Western Standard) -> "Time Signature : 4/4"
+ */
+export function formatTimeSignatureWithTaal(
+  timeSignature: TimeSignature,
+  indianTaal?: string
+): string {
+  const num = timeSignature?.numerator || 4;
+  const den = timeSignature?.denominator || 4;
+  const tsStr = `${num}/${den}`;
+  if (!indianTaal || indianTaal === 'None') {
+    return `Time Signature : ${tsStr}`;
+  }
+  const cleanTaal = indianTaal.replace(/\s*Taal\s*$/i, '').trim();
+  return `Time Signature : ${tsStr} (${cleanTaal} Taal)`;
 }
 
 /**
@@ -182,11 +241,30 @@ export function formatSubdivisionDisplay(pitch: Pitch | null | undefined): strin
 }
 
 /**
- * Total number of beat columns in a measure based on its time signature.
+ * Total number of beat columns in a measure based on its time signature or Indian Taal cycle.
+ * Keharwa = 8-matra cycle: 8 matras in a single measure (not split).
+ * Dadra = 6-matra cycle: 6 matras in a single measure (not split).
  */
-export function getMeasureTotalBeats(measure: Measure | null | undefined, defaultTs: TimeSignature): number {
+export function getMeasureTotalBeats(
+  measure: Measure | null | undefined,
+  defaultTs: TimeSignature,
+  indianTaal?: string
+): number {
   if (measure?.timeSignature?.numerator) {
     return measure.timeSignature.numerator;
+  }
+  if (indianTaal && indianTaal !== 'None') {
+    const lower = indianTaal.toLowerCase();
+    if (lower.includes('keharwa')) {
+      return 8;
+    }
+    if (lower.includes('dadra')) {
+      return 6;
+    }
+    const foundTaal = INDIAN_TAALS.find((t) => t.id === indianTaal || t.name === indianTaal);
+    if (foundTaal && foundTaal.beats) {
+      return foundTaal.beats;
+    }
   }
   return defaultTs?.numerator || 4;
 }

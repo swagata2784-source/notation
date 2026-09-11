@@ -18,6 +18,7 @@ import {
   Volta,
   SpacingObject,
   NotationClipboardData,
+  BarlineType,
 } from './types/score';
 import { SAMPLE_SCORES } from './data/sampleScores';
 import { audioEngine } from './services/audioEngine';
@@ -66,6 +67,7 @@ import { TextAnnotationModal } from './components/modals/TextAnnotationModal';
 import { UnsavedChangesModal } from './components/modals/UnsavedChangesModal';
 import { SaveProjectModal } from './components/modals/SaveProjectModal';
 import { AuthModal } from './components/auth/AuthModal';
+import { SongPropertiesModal } from './components/modals/SongPropertiesModal';
 
 export default function App() {
   // Navigation & Startup view state: persist across refreshes
@@ -77,6 +79,7 @@ export default function App() {
   const [isSaveAsModalOpen, setIsSaveAsModalOpen] = useState(false);
   const [isSaveProjectModalOpen, setIsSaveProjectModalOpen] = useState(false);
   const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
+  const [isSongPropertiesModalOpen, setIsSongPropertiesModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [unsavedModalConfig, setUnsavedModalConfig] = useState<{
     isOpen: boolean;
@@ -828,9 +831,41 @@ export default function App() {
 
   // Clipboard Handlers: Copy, Cut, Paste
   const handleCopy = useCallback(() => {
+    // Multi-measure copy
+    if (selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1) {
+      const selectedMeasures = score.measures.filter((m) =>
+        selection.selectedMeasureIds!.includes(m.id)
+      );
+      const clip: NotationClipboardData = {
+        type: 'measure',
+        measures: JSON.parse(JSON.stringify(selectedMeasures)),
+        timestamp: Date.now(),
+      };
+      setClipboardData(clip);
+      try {
+        localStorage.setItem('pianotastic_clipboard', JSON.stringify(clip));
+      } catch {}
+      showToast(`Copied ${selectedMeasures.length} Bars`);
+      return;
+    }
+
     const selMeasureId = selection.measureId || score.measures[0]?.id;
     const measure = score.measures.find((m) => m.id === selMeasureId);
     if (!measure) return;
+
+    if (selection.selectionType === 'measure' && (selection.beatIndex === undefined || selection.beatIndex === null)) {
+      const clip: NotationClipboardData = {
+        type: 'measure',
+        measure: JSON.parse(JSON.stringify(measure)),
+        timestamp: Date.now(),
+      };
+      setClipboardData(clip);
+      try {
+        localStorage.setItem('pianotastic_clipboard', JSON.stringify(clip));
+      } catch {}
+      showToast(`Copied Bar ${measure.measureNumber}`);
+      return;
+    }
 
     const bIdx = selection.beatIndex !== undefined ? selection.beatIndex : 0;
     const subIdx = selection.subBeatIndex !== undefined ? selection.subBeatIndex : 0;
@@ -863,6 +898,52 @@ export default function App() {
   }, [selection, score, showToast]);
 
   const handleCut = useCallback(() => {
+    // Multi-measure cut
+    if (selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1) {
+      const selectedMeasures = score.measures.filter((m) =>
+        selection.selectedMeasureIds!.includes(m.id)
+      );
+      const clip: NotationClipboardData = {
+        type: 'measure',
+        measures: JSON.parse(JSON.stringify(selectedMeasures)),
+        timestamp: Date.now(),
+      };
+      setClipboardData(clip);
+      try {
+        localStorage.setItem('pianotastic_clipboard', JSON.stringify(clip));
+      } catch {}
+
+      let updatedMeasures = score.measures.filter(
+        (m) => !selection.selectedMeasureIds!.includes(m.id)
+      );
+      if (updatedMeasures.length === 0) {
+        const fallback = JSON.parse(JSON.stringify(score.measures[0]));
+        fallback.id = `m_${Date.now()}`;
+        fallback.beatNotes = {};
+        fallback.beatChords = {};
+        fallback.beatLyrics = {};
+        fallback.beatSymbols = {};
+        updatedMeasures = [fallback];
+      }
+      updatedMeasures.forEach((m, i) => {
+        m.measureNumber = i + 1;
+      });
+
+      pushScoreState({
+        ...score,
+        measures: updatedMeasures,
+      });
+      setSelection((prev) => ({
+        ...prev,
+        measureId: updatedMeasures[0]?.id || null,
+        selectedMeasureIds: [updatedMeasures[0]?.id || ''],
+        selectionType: 'measure',
+        eventId: null,
+      }));
+      showToast(`Cut ${selectedMeasures.length} Bars`);
+      return;
+    }
+
     const selMeasureId = selection.measureId || score.measures[0]?.id;
     const measure = score.measures.find((m) => m.id === selMeasureId);
     if (!measure) return;
@@ -913,6 +994,36 @@ export default function App() {
       showToast('Clipboard is empty');
       return;
     }
+
+    // Multi-measure paste
+    if (clipboardData.measures && clipboardData.measures.length > 0) {
+      const targetMeasureId = selection.measureId || score.measures[0]?.id;
+      const targetIdx = score.measures.findIndex((m) => m.id === targetMeasureId);
+      const insertIdx = targetIdx !== -1 ? targetIdx + 1 : score.measures.length;
+
+      const newMeasures: Measure[] = clipboardData.measures.map((m, idx) => ({
+        ...JSON.parse(JSON.stringify(m)),
+        id: `measure_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      }));
+
+      const updatedMeasures = [...score.measures];
+      updatedMeasures.splice(insertIdx, 0, ...newMeasures);
+      updatedMeasures.forEach((m, i) => {
+        m.measureNumber = i + 1;
+      });
+
+      pushScoreState({ ...score, measures: updatedMeasures });
+      setSelection((prev) => ({
+        ...prev,
+        measureId: newMeasures[0]?.id || null,
+        selectedMeasureIds: newMeasures.map((m) => m.id),
+        selectionType: newMeasures.length > 1 ? 'measures' : 'measure',
+        eventId: null,
+      }));
+      showToast(`Pasted ${newMeasures.length} Bars`);
+      return;
+    }
+
     const selMeasureId = selection.measureId || score.measures[0]?.id;
     const measure = score.measures.find((m) => m.id === selMeasureId);
     if (!measure) return;
@@ -1090,6 +1201,54 @@ export default function App() {
       return updated;
     });
   }, [pushScoreState]);
+
+  // Select Measure (supports single-select, multi-select Ctrl/Cmd, range-select Shift)
+  const handleSelectMeasure = useCallback((clickedMeasureId: string, isCtrl?: boolean, isShift?: boolean) => {
+    setSelection((prev) => {
+      if (isCtrl) {
+        const currentSelected = prev.selectedMeasureIds && prev.selectedMeasureIds.length > 0
+          ? [...prev.selectedMeasureIds]
+          : prev.measureId ? [prev.measureId] : [];
+        const exists = currentSelected.includes(clickedMeasureId);
+        const updated = exists
+          ? currentSelected.filter((id) => id !== clickedMeasureId)
+          : [...currentSelected, clickedMeasureId];
+        return {
+          ...prev,
+          measureId: updated[0] || null,
+          selectedMeasureIds: updated,
+          selectionType: updated.length > 1 ? 'measures' : 'measure',
+          eventId: null,
+        };
+      }
+
+      if (isShift && prev.measureId) {
+        const measureIndexA = score.measures.findIndex((m) => m.id === prev.measureId);
+        const measureIndexB = score.measures.findIndex((m) => m.id === clickedMeasureId);
+        if (measureIndexA !== -1 && measureIndexB !== -1) {
+          const start = Math.min(measureIndexA, measureIndexB);
+          const end = Math.max(measureIndexA, measureIndexB);
+          const rangeIds = score.measures.slice(start, end + 1).map((m) => m.id);
+          return {
+            ...prev,
+            measureId: clickedMeasureId,
+            selectedMeasureIds: rangeIds,
+            selectionType: 'measures',
+            eventId: null,
+          };
+        }
+      }
+
+      // Single click
+      return {
+        ...prev,
+        measureId: clickedMeasureId,
+        selectedMeasureIds: [clickedMeasureId],
+        selectionType: 'measure',
+        eventId: null,
+      };
+    });
+  }, [score.measures]);
 
   // Select Volta
   const handleSelectVolta = useCallback((voltaId: string) => {
@@ -1309,18 +1468,25 @@ export default function App() {
 
   const handleDuplicateMeasure = useCallback((targetMeasureId: string) => {
     setScore((prev) => {
-      const idx = prev.measures.findIndex((m) => m.id === targetMeasureId);
-      if (idx === -1) return prev;
-      const target = prev.measures[idx];
+      const isMulti = selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1;
+      const idsToDup = isMulti ? selection.selectedMeasureIds! : [targetMeasureId];
+      const measuresToDup = prev.measures.filter((m) => idsToDup.includes(m.id));
+      if (measuresToDup.length === 0) return prev;
 
-      const cloned: Measure = JSON.parse(JSON.stringify(target));
-      cloned.id = `m_${Date.now()}`;
-      cloned.rhEvents.forEach((e) => (e.id = `rh_${Math.random()}`));
-      cloned.lhEvents.forEach((e) => (e.id = `lh_${Math.random()}`));
-      cloned.chordSymbols.forEach((c) => (c.id = `cs_${Math.random()}`));
+      const lastIdx = Math.max(...idsToDup.map((id) => prev.measures.findIndex((m) => m.id === id)));
+      const insertAt = lastIdx !== -1 ? lastIdx + 1 : prev.measures.length;
+
+      const clonedList: Measure[] = measuresToDup.map((target, cIdx) => {
+        const cloned: Measure = JSON.parse(JSON.stringify(target));
+        cloned.id = `m_${Date.now()}_${cIdx}`;
+        cloned.rhEvents.forEach((e) => (e.id = `rh_${Math.random()}`));
+        cloned.lhEvents.forEach((e) => (e.id = `lh_${Math.random()}`));
+        cloned.chordSymbols.forEach((c) => (c.id = `cs_${Math.random()}`));
+        return cloned;
+      });
 
       const newMeasures = [...prev.measures];
-      newMeasures.splice(idx + 1, 0, cloned);
+      newMeasures.splice(insertAt, 0, ...clonedList);
       newMeasures.forEach((m, i) => {
         m.measureNumber = i + 1;
       });
@@ -1332,21 +1498,40 @@ export default function App() {
 
       const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
-      setSelection({ measureId: cloned.id, staff: 'RH', eventId: null });
+      setSelection({
+        measureId: clonedList[0].id,
+        selectedMeasureIds: clonedList.map((m) => m.id),
+        selectionType: clonedList.length > 1 ? 'measures' : 'measure',
+        staff: 'RH',
+        eventId: null,
+      });
+      showToast(`Duplicated ${clonedList.length} Bar${clonedList.length > 1 ? 's' : ''}`);
       return updated;
     });
-  }, [pushScoreState]);
+  }, [selection, pushScoreState, showToast]);
 
   const handleDeleteMeasure = useCallback((targetMeasureId: string) => {
     setScore((prev) => {
-      if (prev.measures.length <= 1) return prev;
-      const newMeasures = prev.measures.filter((m) => m.id !== targetMeasureId);
+      const isMulti = selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1;
+      const idsToDelete = isMulti ? selection.selectedMeasureIds! : [targetMeasureId];
+      if (prev.measures.length <= idsToDelete.length && prev.measures.length <= 1) return prev;
+
+      let newMeasures = prev.measures.filter((m) => !idsToDelete.includes(m.id));
+      if (newMeasures.length === 0) {
+        const fallback = JSON.parse(JSON.stringify(prev.measures[0]));
+        fallback.id = `m_${Date.now()}`;
+        fallback.beatNotes = {};
+        fallback.beatChords = {};
+        fallback.beatLyrics = {};
+        fallback.beatSymbols = {};
+        newMeasures = [fallback];
+      }
       newMeasures.forEach((m, i) => {
         m.measureNumber = i + 1;
       });
 
       const updatedAnnotations = (prev.textAnnotations || [])
-        .filter((t) => t.measureId !== targetMeasureId)
+        .filter((t) => !idsToDelete.includes(t.measureId))
         .map((t) => {
           const mIdx = newMeasures.findIndex((m) => m.id === t.measureId);
           return mIdx >= 0 ? { ...t, measureNumber: mIdx + 1 } : t;
@@ -1354,17 +1539,30 @@ export default function App() {
 
       const updated: Score = { ...prev, measures: newMeasures, textAnnotations: updatedAnnotations };
       pushScoreState(updated);
-      setSelection({ measureId: newMeasures[0].id, staff: 'RH', eventId: null });
+      setSelection({
+        measureId: newMeasures[0].id,
+        selectedMeasureIds: [newMeasures[0].id],
+        selectionType: 'measure',
+        staff: 'RH',
+        eventId: null,
+      });
+      showToast(`Deleted ${idsToDelete.length} Bar${idsToDelete.length > 1 ? 's' : ''}`);
       return updated;
     });
-  }, [pushScoreState]);
+  }, [selection, pushScoreState, showToast]);
 
   const handleClearMeasure = useCallback((targetMeasureId: string) => {
     setScore((prev) => {
+      const isMulti = selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1;
+      const idsToClear = isMulti ? selection.selectedMeasureIds! : [targetMeasureId];
       const updatedMeasures = prev.measures.map((m) => {
-        if (m.id !== targetMeasureId) return m;
+        if (!idsToClear.includes(m.id)) return m;
         return {
           ...m,
+          beatNotes: {},
+          beatChords: {},
+          beatLyrics: {},
+          beatSymbols: {},
           chordSymbols: [],
           rhEvents: [{ id: `rh_${Date.now()}`, type: 'rest' as const, pitches: [], duration: 'whole' as const }],
           lhEvents: [{ id: `lh_${Date.now()}`, type: 'rest' as const, pitches: [], duration: 'whole' as const }],
@@ -1372,9 +1570,29 @@ export default function App() {
       });
       const updated: Score = { ...prev, measures: updatedMeasures };
       pushScoreState(updated);
+      showToast(`Cleared ${idsToClear.length} Bar${idsToClear.length > 1 ? 's' : ''}`);
       return updated;
     });
-  }, [pushScoreState]);
+  }, [selection, pushScoreState, showToast]);
+
+  const handleToggleDoubleBarline = useCallback((measureId: string) => {
+    setScore((prev) => {
+      const isMulti = selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1;
+      const ids = isMulti ? selection.selectedMeasureIds! : [measureId];
+      const updatedMeasures: Measure[] = prev.measures.map((m) => {
+        if (!ids.includes(m.id)) return m;
+        const nextType: BarlineType = m.barlineType === 'double' ? 'single' : 'double';
+        return {
+          ...m,
+          barlineType: nextType,
+        };
+      });
+      const updated = { ...prev, measures: updatedMeasures };
+      pushScoreState(updated);
+      showToast(`Double barline toggled for ${ids.length} Bar${ids.length > 1 ? 's' : ''}`);
+      return updated;
+    });
+  }, [selection, pushScoreState, showToast]);
 
   const handleMeasureWidthChange = useCallback((measureId: string, newWidth: number) => {
     setScore((prev) => {
@@ -2212,6 +2430,12 @@ export default function App() {
 
   // Delete Selected Event (volta, chord, lyric, text annotation, or note/beat)
   const handleDeleteSelected = useCallback(() => {
+    if (selection.selectionType === 'measures' || (selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1)) {
+      if (selection.selectedMeasureIds && selection.selectedMeasureIds.length > 0) {
+        handleDeleteMeasure(selection.selectedMeasureIds[0]);
+        return;
+      }
+    }
     if (selection.selectionType === 'volta' && selection.voltaId) {
       handleDeleteVolta(selection.voltaId);
       return;
@@ -2240,6 +2464,8 @@ export default function App() {
     handleClearCurrentBeat();
   }, [
     selection,
+    handleDeleteMeasure,
+    handleDeleteVolta,
     handleDeleteTextAnnotation,
     handleUpdateBeatChord,
     handleUpdateBeatLyric,
@@ -2250,6 +2476,37 @@ export default function App() {
   // Transpose Selected Note Up / Down (supports Pianotastic subdivision notes and standard events)
   const handleTransposeSelected = useCallback((stepDelta: number) => {
     try {
+      if (selection.selectedMeasureIds && selection.selectedMeasureIds.length > 1) {
+        const updatedMeasures = score.measures.map((m) => {
+          if (!selection.selectedMeasureIds!.includes(m.id)) return m;
+          const nextBeatNotes = { ...(m.beatNotes || {}) };
+          Object.keys(nextBeatNotes).forEach((k) => {
+            const notes = nextBeatNotes[Number(k)] || [];
+            nextBeatNotes[Number(k)] = notes.map((p) => {
+              if (!p || !p.step) return p;
+              const curStepVal = getDiatonicStepValue(p);
+              const nextStepVal = curStepVal + stepDelta;
+              const nextPitch = pitchFromDiatonicStepValue(nextStepVal);
+              return {
+                step: nextPitch.step,
+                octave: nextPitch.octave,
+                accidental: p.accidental,
+              };
+            });
+          });
+          const updatedM: Measure = { ...m, beatNotes: nextBeatNotes };
+          return syncMeasureEventsFromBeatData(
+            updatedM,
+            score.metadata.initialTimeSignature,
+            score.metadata.handTemplate || 'Both'
+          );
+        });
+        const updated: Score = { ...score, measures: updatedMeasures };
+        pushScoreState(updated);
+        showToast(`Transposed ${selection.selectedMeasureIds.length} Bars by ${stepDelta > 0 ? '+' : ''}${stepDelta}`);
+        return;
+      }
+
       const currentMeasureId = selection.measureId || score.measures[0]?.id;
       const measureIdx = Math.max(0, score.measures.findIndex((m) => m.id === currentMeasureId));
       const currentMeasure = score.measures[measureIdx];
@@ -2361,6 +2618,7 @@ export default function App() {
         isNewScoreModalOpen ||
         isSaveAsModalOpen ||
         isLibraryModalOpen ||
+        isSongPropertiesModalOpen ||
         isCustomTimeSigOpen ||
         isChordDialogOpen ||
         isShortcutsOpen ||
@@ -2441,6 +2699,13 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         requestNewProject();
+        return;
+      }
+
+      // Song Properties (Alt+Enter)
+      if (e.altKey && e.key === 'Enter') {
+        e.preventDefault();
+        setIsSongPropertiesModalOpen(true);
         return;
       }
 
@@ -2840,6 +3105,7 @@ export default function App() {
         onOpenSaveAs={() => setIsSaveAsModalOpen(true)}
         onOpenProjectLibrary={() => requestOpenProject()}
         onOpenPrintStudio={() => setViewMode('print')}
+        onOpenSongProperties={() => setIsSongPropertiesModalOpen(true)}
         onAddMeasure={handleOpenAddMeasuresModal}
         onOpenCustomTimeSignature={() => setIsCustomTimeSigOpen(true)}
         onChangeTimeSignature={handleChangeTimeSignature}
@@ -2909,9 +3175,7 @@ export default function App() {
               activeHand={activeHand}
               selection={selection}
               playbackPosition={playbackPosition}
-              onSelectMeasure={(measureId) =>
-                setSelection((sel) => ({ ...sel, measureId, eventId: null }))
-              }
+              onSelectMeasure={handleSelectMeasure}
               onSelectBeat={(measureId, beatIndex, subBeatIndex, selectionType) =>
                 setSelection((sel) => ({
                   ...sel,
@@ -3112,6 +3376,7 @@ export default function App() {
           onResetWidth={(mId) => handleMeasureWidthChange(mId, undefined as any)}
           onOpenNavigation={(measure) => setNavigationModalMeasure(measure)}
           onToggleLineBreak={handleToggleLineBreak}
+          onToggleDoubleBarline={handleToggleDoubleBarline}
           onAddSpaceBelow={(mId) => handleAddSpace(mId, 30)}
           onCopyMeasure={handleCopyMeasure}
           onPasteIntoMeasure={handlePasteIntoMeasure}
@@ -3257,6 +3522,16 @@ export default function App() {
           targetBeatNumber={textModalConfig.beatIndex !== undefined ? textModalConfig.beatIndex + 1 : undefined}
         />
       )}
+
+      {/* Song Properties Configuration Modal */}
+      <SongPropertiesModal
+        isOpen={isSongPropertiesModalOpen}
+        onClose={() => setIsSongPropertiesModalOpen(false)}
+        metadata={score.metadata}
+        layoutSettings={score.layoutSettings}
+        onUpdateMetadata={handleUpdateMetadata}
+        onUpdateLayout={handleUpdateLayout}
+      />
     </div>
   );
 }

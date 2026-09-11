@@ -234,6 +234,7 @@ export class ProjectStorageService {
         indianTaal: config.taalId,
         pickupBeat: config.pickupBeat || 1,
         pickupMeasure: config.pickupMeasure || 1,
+        keyboardLayout: '61',
       },
       layoutSettings: {
         pageSize: 'A4',
@@ -242,6 +243,7 @@ export class ProjectStorageService {
         measuresPerSystemAuto: config.barsPerLine || 4,
         barsPerLine: config.barsPerLine || 4,
         pageMargins: { top: 40, right: 36, bottom: 40, left: 36 },
+        keyboardLayout: '61',
         showAcademyBranding: true,
         showMeasureNumbers: true,
         showAnnotations: true,

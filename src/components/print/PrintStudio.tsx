@@ -699,6 +699,7 @@ export const PrintStudio: React.FC<PrintStudioProps> = ({ score, onBackToEditor 
             >
               <NotationRenderer
                 score={printScore}
+                isPrintView={true}
                 toolMode="select"
                 selection={{ measureId: null, staff: 'RH', eventId: null }}
                 playbackPosition={null}

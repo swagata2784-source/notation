@@ -22,6 +22,8 @@ import {
   getEffectiveBeatValue,
   getNormalizedVoltas,
   getSuperscriptOctave,
+  getDisplayOctave,
+  formatTimeSignatureWithTaal,
 } from '../../utils/pianotasticNotation';
 import { audioEngine } from '../../services/audioEngine';
 import { Check, Trash2, X } from 'lucide-react';
@@ -37,7 +39,7 @@ interface NotationRendererProps {
   selection: SelectionState;
   playbackPosition: { measureIndex: number; beat: number } | null;
   currentBeatValue?: number;
-  onSelectMeasure: (measureId: string) => void;
+  onSelectMeasure: (measureId: string, isCtrl?: boolean, isShift?: boolean) => void;
   onSelectBeat: (
     measureId: string,
     beatIndex: number,
@@ -105,6 +107,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const isPlaying = Boolean(playbackPosition) || audioEngine.getIsPlaying();
+  const keyboardLayout = score.layoutSettings.keyboardLayout || score.metadata.keyboardLayout || '61';
 
   // Inline Editing Popovers State
   const [activeChordPopover, setActiveChordPopover] = useState<{
@@ -556,7 +559,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                 )}
 
                 {/* Score Header on First Page */}
-                {pageIndex === 0 && (
+                {pageIndex === 0 && score.layoutSettings.showHeader !== false && (
                   <g className="score-header">
                     {/* Score Title */}
                     <text
@@ -586,25 +589,30 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                     </text>
                   )}
 
-                  {/* Tempo & Time Signature (Top Left) */}
+                  {/* Tempo & Time Signature + Taal Label (Top Left) */}
                   <g>
                     <text
                       x={staffMarginLeft}
-                      y={123}
+                      y={118}
                       fontFamily="'Plus Jakarta Sans', sans-serif"
                       fontSize="12"
                       fontWeight="bold"
                       fill="#0f172a"
                     >
                       ♩ = {score.metadata.tempoBpm || 80}
-                      <tspan fill="#64748b" fontWeight="normal">
-                        {' '}
-                        • {score.metadata.initialTimeSignature.numerator}/
-                        {score.metadata.initialTimeSignature.denominator}
-                        {score.metadata.indianTaal && score.metadata.indianTaal !== 'None'
-                          ? ` • ${score.metadata.indianTaal}`
-                          : ''}
-                      </tspan>
+                    </text>
+                    <text
+                      x={staffMarginLeft}
+                      y={134}
+                      fontFamily="'Plus Jakarta Sans', sans-serif"
+                      fontSize="11"
+                      fontWeight="600"
+                      fill="#475569"
+                    >
+                      {formatTimeSignatureWithTaal(
+                        score.metadata.initialTimeSignature,
+                        score.metadata.indianTaal
+                      )}
                     </text>
                   </g>
 
@@ -823,7 +831,9 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                     })}
 
                     {systemMeasures.map(({ measure, width, measureIdx, measureX }, mIdxInSys) => {
-                      const isSelectedMeasure = selection.measureId === measure.id;
+                      const isSelectedMeasure =
+                        selection.measureId === measure.id ||
+                        Boolean(selection.selectedMeasureIds?.includes(measure.id));
                       const totalBeats = getMeasureTotalBeats(measure, score.metadata.initialTimeSignature);
                       const colWidth = width / totalBeats;
                       const beatPitches = getMeasureBeatPitches(measure, totalBeats, handTemplate);
@@ -865,8 +875,11 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                             y={systemY - 20}
                             width={width}
                             height={measureBlockHeight + 40}
-                            fill={isSelectedMeasure ? '#f8fafc' : 'transparent'}
-                            fillOpacity={isSelectedMeasure ? '0.75' : '0'}
+                            fill={isSelectedMeasure && !isPrintView ? '#eff6ff' : 'transparent'}
+                            fillOpacity={isSelectedMeasure && !isPrintView ? '0.75' : '0'}
+                            stroke={isSelectedMeasure && !isPrintView ? '#3b82f6' : 'transparent'}
+                            strokeWidth={isSelectedMeasure && !isPrintView ? '1.5' : '0'}
+                            rx={4}
                             className={toolMode === 'text' ? 'cursor-text' : 'cursor-pointer'}
                             onClick={(e) => {
                               if (toolMode === 'text') {
@@ -879,7 +892,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                 onOpenAddTextModal?.(measure.id, b, isAbove ? 'above' : 'below');
                                 return;
                               }
-                              onSelectMeasure(measure.id);
+                              onSelectMeasure(measure.id, e.ctrlKey || e.metaKey, e.shiftKey);
                             }}
                           />
 
@@ -912,7 +925,7 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                 (Pickup @ Beat {pickupBeat})
                               </tspan>
                             )}
-                            {isSelectedMeasure && !isPlaying && (
+                            {isSelectedMeasure && !isPlaying && !isPrintView && (
                               <tspan
                                 fill="#10b981"
                                 fontSize="9"
@@ -1307,7 +1320,12 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                                                   fill={isSubBeatActive ? '#92400e' : '#1e293b'}
                                                   fontFamily="'Plus Jakarta Sans', sans-serif"
                                                 >
-                                                  {getSuperscriptOctave(p?.octave ?? (handTemplate === 'LH' ? 3 : 4))}
+                                                  {getSuperscriptOctave(
+                                                    getDisplayOctave(
+                                                      p?.octave ?? (handTemplate === 'LH' ? 3 : 4),
+                                                      keyboardLayout
+                                                    )
+                                                  )}
                                                 </tspan>
                                               </text>
                                             )}
@@ -1595,49 +1613,57 @@ export const NotationRenderer: React.FC<NotationRendererProps> = ({
                 );
               })()}
 
-              {/* Canonical Score Page Footer */}
-              <g className="score-footer score-page-footer">
-                <line
-                  x1={staffMarginLeft}
-                  y1={pageHeight - pageMarginBottom + 8}
-                  x2={pageWidth - staffMarginRight}
-                  y2={pageHeight - pageMarginBottom + 8}
-                  stroke="#cbd5e1"
-                  strokeWidth="1"
-                />
-                <text
-                  x={staffMarginLeft}
-                  y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
-                  fontFamily="'Plus Jakarta Sans', sans-serif"
-                  fontSize="10"
-                  fontWeight="500"
-                  fill="#475569"
-                >
-                  {score.metadata.copyright || '© Pianotastic Academy'}
-                </text>
-                <text
-                  x={pageWidth / 2}
-                  y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
-                  fontFamily="'Plus Jakarta Sans', sans-serif"
-                  fontSize="9.5"
-                  fontWeight="600"
-                  fill="#64748b"
-                  textAnchor="middle"
-                >
-                  Pianotastic Sheet Music
-                </text>
-                <text
-                  x={pageWidth - staffMarginRight}
-                  y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
-                  fontFamily="'Plus Jakarta Sans', sans-serif"
-                  fontSize="10"
-                  fontWeight="600"
-                  fill="#334155"
-                  textAnchor="end"
-                >
-                  Page {pageIndex + 1} of {pages.length}
-                </text>
-              </g>
+              {/* Canonical Score Page Footer (Separate and independent from Header) */}
+              {score.layoutSettings.showFooter && (score.layoutSettings.footerShowOnAllPages !== false || pageIndex > 0) && (
+                <g className="score-footer score-page-footer">
+                  <line
+                    x1={staffMarginLeft}
+                    y1={pageHeight - pageMarginBottom + 8}
+                    x2={pageWidth - staffMarginRight}
+                    y2={pageHeight - pageMarginBottom + 8}
+                    stroke="#cbd5e1"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={staffMarginLeft}
+                    y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
+                    fontFamily="'Plus Jakarta Sans', sans-serif"
+                    fontSize="10"
+                    fontWeight="500"
+                    fill="#475569"
+                  >
+                    {score.layoutSettings.footerCustomText !== undefined
+                      ? score.layoutSettings.footerCustomText
+                      : score.metadata.copyright || '© Pianotastic Academy'}
+                  </text>
+                  <text
+                    x={pageWidth / 2}
+                    y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
+                    fontFamily="'Plus Jakarta Sans', sans-serif"
+                    fontSize="9.5"
+                    fontWeight="600"
+                    fill="#64748b"
+                    textAnchor="middle"
+                  >
+                    Pianotastic Sheet Music
+                  </text>
+                  {score.layoutSettings.footerPageNumbering !== 'none' && (
+                    <text
+                      x={pageWidth - staffMarginRight}
+                      y={pageHeight - Math.max(10, pageMarginBottom * 0.35)}
+                      fontFamily="'Plus Jakarta Sans', sans-serif"
+                      fontSize="10"
+                      fontWeight="600"
+                      fill="#334155"
+                      textAnchor="end"
+                    >
+                      {score.layoutSettings.footerPageNumbering === 'simple'
+                        ? `${pageIndex + 1}`
+                        : `Page ${pageIndex + 1} of ${pages.length}`}
+                    </text>
+                  )}
+                </g>
+              )}
 
               {/* Independent Page-Level Text Objects Layer */}
               <PageTextObjectsLayer

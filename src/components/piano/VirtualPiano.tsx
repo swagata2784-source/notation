@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Pitch, NoteStep, AccidentalType } from '../../types/score';
 import { audioEngine } from '../../services/audioEngine';
 import { midiService } from '../../services/midiService';
+import { getDisplayOctave, getSuperscriptOctave } from '../../utils/pianotasticNotation';
 import { X, Keyboard, Eye, EyeOff, Music, Volume2 } from 'lucide-react';
 
 export type PianoKeyboardSize = '61' | '76' | '88';
@@ -12,14 +13,18 @@ interface VirtualPianoProps {
   onClose: () => void;
   onKeyPress: (pitch: Pitch) => void;
   selectedAccidental: AccidentalType | null;
+  keyboardSize?: PianoKeyboardSize;
+  onKeyboardSizeChange?: (size: PianoKeyboardSize) => void;
 }
 
 interface KeyDef {
   step: NoteStep;
   octave: number;
+  displayOctave: number;
   isBlack: boolean;
   accidental?: AccidentalType;
   label: string;
+  displayLabel: string;
   computerKey?: string;
   midiNote: number;
 }
@@ -28,9 +33,17 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
   isOpen,
   onClose,
   onKeyPress,
+  keyboardSize: controlledKeyboardSize,
+  onKeyboardSizeChange,
 }) => {
   const [activeKeyMidi, setActiveKeyMidi] = useState<number | null>(null);
-  const [keyboardSize, setKeyboardSize] = useState<PianoKeyboardSize>('88');
+  const [internalKeyboardSize, setInternalKeyboardSize] = useState<PianoKeyboardSize>('61');
+  const keyboardSize = controlledKeyboardSize || internalKeyboardSize;
+
+  const handleSetKeyboardSize = (size: PianoKeyboardSize) => {
+    setInternalKeyboardSize(size);
+    onKeyboardSizeChange?.(size);
+  };
   const [pianoMode, setPianoMode] = useState<PianoMode>('input');
   const [showNoteNames, setShowNoteNames] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -89,13 +102,19 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
     const pitchClass = ((semitoneFromC0 % 12) + 12) % 12;
     const np = notePitches[pitchClass];
     const label = np.acc ? `${np.step}#${octave}` : `${np.step}${octave}`;
+    const displayOctave = getDisplayOctave(octave, keyboardSize);
+    const displayLabel = np.acc
+      ? `${np.step}#${getSuperscriptOctave(displayOctave)}`
+      : `${np.step}${getSuperscriptOctave(displayOctave)}`;
 
     keys.push({
       step: np.step,
       octave,
+      displayOctave,
       isBlack: np.isBlack,
       accidental: np.acc,
       label,
+      displayLabel,
       computerKey: octave4Bindings[label],
       midiNote: midi,
     });
@@ -124,10 +143,10 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
   const whiteKeyWidth = keyboardSize === '88' ? 24 : keyboardSize === '76' ? 28 : 34; // in px
   const blackKeyWidth = Math.round(whiteKeyWidth * 0.66);
 
-  // Auto-scroll to center on Middle C (C4) on mount or keyboard resize
+  // Auto-scroll to center on Middle C (MIDI 60) on mount or keyboard resize
   useEffect(() => {
     if (isOpen && scrollContainerRef.current) {
-      const middleCIndex = whiteKeys.findIndex((wk) => wk.label === 'C4');
+      const middleCIndex = whiteKeys.findIndex((wk) => wk.midiNote === 60);
       if (middleCIndex >= 0) {
         const containerWidth = scrollContainerRef.current.clientWidth;
         const targetX = middleCIndex * whiteKeyWidth - containerWidth / 2 + whiteKeyWidth / 2;
@@ -198,7 +217,7 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
             {(['61', '76', '88'] as PianoKeyboardSize[]).map((sz) => (
               <button
                 key={sz}
-                onClick={() => setKeyboardSize(sz)}
+                onClick={() => handleSetKeyboardSize(sz)}
                 className={`px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
                   keyboardSize === sz
                     ? 'bg-stone-600 text-white font-bold'
@@ -244,7 +263,7 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
         >
           {/* White Keys */}
           {whiteKeys.map((wk) => {
-            const isMiddleC = wk.label === 'C4';
+            const isMiddleC = wk.midiNote === 60;
             const isPressed = activeKeyMidi === wk.midiNote;
 
             return (
@@ -272,7 +291,7 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
                       isMiddleC ? 'text-amber-950 font-bold' : 'text-stone-700 font-semibold'
                     }`}
                   >
-                    {wk.label}
+                    {wk.displayLabel}
                   </span>
                 )}
                 {isMiddleC && (
@@ -316,7 +335,7 @@ export const VirtualPiano: React.FC<VirtualPianoProps> = ({
                     </span>
                   )}
                   {showNoteNames && keyboardSize !== '88' && (
-                    <span className="text-[7px] font-mono opacity-80">{key.step}#</span>
+                    <span className="text-[7px] font-mono opacity-80">{key.displayLabel}</span>
                   )}
                 </button>
               );

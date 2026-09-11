@@ -1342,6 +1342,46 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               </div>
             </div>
 
+            {/* Right Barline Style */}
+            <div className="bg-stone-50 rounded-lg p-2.5 border border-stone-200 space-y-2">
+              <span className="font-bold text-stone-800 text-[11px] uppercase tracking-wide block">
+                Right Barline Style
+              </span>
+              <div className="grid grid-cols-4 gap-1">
+                {[
+                  { label: 'Normal', value: 'single', glyph: '|' },
+                  { label: 'Double', value: 'double', glyph: '||' },
+                  { label: 'Final', value: 'end', glyph: '|▌' },
+                  { label: 'Repeat', value: 'repeat_end', glyph: ':||' },
+                ].map(({ label, value, glyph }) => {
+                  const isSelected = (activeMeasure?.barlineType || 'single') === value;
+                  return (
+                    <button
+                      key={value}
+                      id={`barline-style-${value}`}
+                      onClick={() => {
+                        if (activeMeasure) {
+                          onUpdateMeasure(activeMeasure.id, {
+                            barlineType: value as any,
+                            repeatEnd: value === 'repeat_end' ? true : activeMeasure.repeatEnd,
+                          });
+                        }
+                      }}
+                      className={`py-1.5 px-1 rounded font-semibold text-xs transition-colors flex flex-col items-center justify-center ${
+                        isSelected
+                          ? 'bg-stone-900 text-white shadow-xs'
+                          : 'bg-white border border-stone-200 text-stone-700 hover:bg-stone-100'
+                      }`}
+                      title={`${label} Barline`}
+                    >
+                      <span className="font-mono text-[13px] font-bold leading-tight">{glyph}</span>
+                      <span className="text-[10px] mt-0.5">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Measure Operations (Add, Insert, Duplicate, Delete) */}
             <div className="bg-stone-50 rounded-lg p-2.5 border border-stone-200 space-y-2">
               <span className="font-bold text-stone-800 text-[11px] uppercase tracking-wide block">

@@ -32,6 +32,7 @@ import {
   ClipboardPaste,
   Cloud,
   User as UserIcon,
+  Settings2,
 } from 'lucide-react';
 import { ExportService } from '../../services/exportService';
 import { CloudSyncStatusIndicator, CloudSyncState } from './CloudSyncStatusIndicator';
@@ -70,6 +71,7 @@ interface HeaderProps {
   onOpenSaveAs?: () => void;
   onOpenProjectLibrary?: () => void;
   onOpenPrintStudio?: () => void;
+  onOpenSongProperties?: () => void;
   onChangeTimeSignature?: (ts: TimeSignature) => void;
 }
 
@@ -108,6 +110,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSaveAs,
   onOpenProjectLibrary,
   onOpenPrintStudio,
+  onOpenSongProperties,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -363,6 +366,20 @@ export const Header: React.FC<HeaderProps> = ({
                     <span>Print</span>
                   </div>
                   <span className="text-[10px] text-stone-400 font-mono">Ctrl+P</span>
+                </button>
+                <button
+                  id="header-song-properties-btn"
+                  onClick={() => {
+                    onOpenSongProperties?.();
+                    setActiveMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-amber-50 hover:text-amber-950 flex items-center justify-between text-stone-900 font-medium transition-colors"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Settings2 className="w-3.5 h-3.5 text-stone-600" />
+                    <span>Song Properties...</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono">Alt+Enter</span>
                 </button>
 
                 <div className="my-1 border-t border-stone-100" />
@@ -962,16 +979,26 @@ export const Header: React.FC<HeaderProps> = ({
           />
         ) : (
           <div
-            onClick={() => setIsEditingTitle(true)}
-            className="cursor-pointer group flex items-center space-x-1.5 px-3 py-1 rounded-md hover:bg-stone-100 transition-colors"
-            title="Click to edit score title"
+            className="group flex items-center space-x-1.5 px-3 py-1 rounded-md hover:bg-stone-100 transition-colors"
+            title="Click title to edit, or click gear for Song Properties"
           >
-            <span className="font-serif text-sm font-medium text-stone-900">
+            <span
+              onClick={() => setIsEditingTitle(true)}
+              className="font-serif text-sm font-medium text-stone-900 cursor-pointer"
+            >
               {score.metadata.title}
             </span>
-            <span className="text-[10px] text-stone-600 opacity-0 group-hover:opacity-100 font-sans">
-              Edit
-            </span>
+            <button
+              id="header-song-props-icon-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSongProperties?.();
+              }}
+              title="Song Properties & Keyboard Layout"
+              className="p-1 rounded hover:bg-stone-200 text-stone-400 hover:text-stone-700 transition-colors opacity-70 group-hover:opacity-100 cursor-pointer"
+            >
+              <Settings2 className="w-3 h-3" />
+            </button>
           </div>
         )}
       </div>
@@ -1027,6 +1054,28 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
+        </div>
+
+        {/* Keyboard Layout Switcher (61, 76, 88 Keys) */}
+        <div className="flex items-center space-x-1.5 bg-stone-100 px-2 py-1 rounded-lg border border-stone-200 text-xs shadow-2xs">
+          <Piano className="w-3.5 h-3.5 text-stone-700 shrink-0" />
+          <span className="text-[11px] font-semibold text-stone-600 hidden sm:inline">Keyboard:</span>
+          <select
+            id="header-keyboard-layout-select"
+            value={score.layoutSettings.keyboardLayout || score.metadata.keyboardLayout || '61'}
+            onChange={(e) => {
+              const layout = e.target.value as '61' | '76' | '88';
+              onUpdateLayout({ keyboardLayout: layout });
+              onUpdateMetadata({ keyboardLayout: layout });
+              showToast(`Switched keyboard layout to ${layout} Keys`);
+            }}
+            className="bg-white border border-stone-300 rounded px-1.5 py-0.5 text-xs font-semibold text-stone-800 hover:border-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-500 cursor-pointer"
+            title="Keyboard Layout & Octave Display Convention (61, 76, or 88 Keys)"
+          >
+            <option value="61">61 Keys</option>
+            <option value="76">76 Keys</option>
+            <option value="88">88 Keys</option>
+          </select>
         </div>
 
         {/* Educational View Mode Switcher */}

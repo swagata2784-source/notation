@@ -209,6 +209,7 @@ export interface ScoreMetadata {
   initialKeySignature: string;
   handTemplate?: HandTemplate;
   indianTaal?: string;
+  keyboardLayout?: '61' | '76' | '88';
   pickupMeasure?: number; // Backwards-compatible
   pickupBeat?: number; // Starting beat in Measure 1 (1-based, default 1)
 }
@@ -231,6 +232,12 @@ export interface LayoutSettings {
   showAcademyBranding: boolean; // Toggle Academy branding
   academyFooterText?: string;
   zoom: number; // 0.7 to 1.8
+  keyboardLayout?: '61' | '76' | '88';
+  showHeader?: boolean; // Independent toggle: Show header (defaults to true)
+  showFooter?: boolean; // Independent toggle: Show footer (optional, independent of header)
+  footerPageNumbering?: 'none' | 'simple' | 'page_of_total'; // 'simple' = 1, 2, 3... | 'page_of_total' = Page 1 of N
+  footerCustomText?: string;
+  footerShowOnAllPages?: boolean;
 }
 
 export interface ScoreTextAnnotation {

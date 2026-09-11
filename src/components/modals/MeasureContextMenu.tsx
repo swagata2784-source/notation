@@ -27,6 +27,7 @@ interface MeasureContextMenuProps {
   onResetWidth: (measureId: string) => void;
   onOpenNavigation?: (measure: Measure) => void;
   onToggleLineBreak?: (measureId: string) => void;
+  onToggleDoubleBarline?: (measureId: string) => void;
   onAddSpaceBelow?: (measureId: string) => void;
   onCopyMeasure?: (measureId: string) => void;
   onPasteIntoMeasure?: (measureId: string) => void;
@@ -46,6 +47,7 @@ export const MeasureContextMenu: React.FC<MeasureContextMenuProps> = ({
   onResetWidth,
   onOpenNavigation,
   onToggleLineBreak,
+  onToggleDoubleBarline,
   onAddSpaceBelow,
   onCopyMeasure,
   onPasteIntoMeasure,
@@ -188,6 +190,26 @@ export const MeasureContextMenu: React.FC<MeasureContextMenuProps> = ({
         </span>
         <span className="text-[10px] text-stone-400 font-mono">↵</span>
       </button>
+
+      {/* Manual Double Barline Toggle */}
+      {onToggleDoubleBarline && (
+        <button
+          id="context-menu-double-barline-btn"
+          onClick={() => {
+            onToggleDoubleBarline(measure.id);
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 text-left hover:bg-stone-50 flex items-center justify-between text-stone-800"
+        >
+          <span className="flex items-center space-x-2">
+            <span className="font-mono font-bold text-stone-700">||</span>
+            <span>{measure.barlineType === 'double' ? 'Remove Double Barline' : 'Double Barline (||)'}</span>
+          </span>
+          {measure.barlineType === 'double' && (
+            <span className="text-[10px] text-amber-600 font-bold">Active</span>
+          )}
+        </button>
+      )}
 
       <div className="my-1 border-t border-stone-100" />
 
